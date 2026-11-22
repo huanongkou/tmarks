@@ -3,116 +3,97 @@ import type { Env } from './types'
 
 type RateLimiterContext = Parameters<PagesFunction<Env>>[0]
 
-/**
- * Rate limit configuration
- */
-interface RateLimitConfig {
-  key: string // The identifier (IP, user_id, etc.)
-  limit: number // Maximum number of requests
-  window: number // Time window in seconds
+interface RateLimitResult {
+  allowed: boolean
+  remaining: number
+  resetAt: number
+  retryAfter?: number
 }
 
-/**
- * Rate limiter using KV storage
- *
- * Store format in KV:
- * Key: `ratelimit:{identifier}`
- * Value: JSON { count: number, reset_at: number }
- */
-export async function checkRateLimit(
-  kv: KVNamespace | undefined,
-  config: RateLimitConfig
-): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
-  // If KV is not available, allow all requests (development mode)
-  if (!kv) {
-    return {
-      allowed: true,
-      remaining: config.limit,
-      resetAt: Date.now() + config.window * 1000,
-    }
-  }
+let ensureTablePromise: Promise<void> | null = null
 
-  const kvKey = `ratelimit:${config.key}`
+async function ensureTable(db: D1Database): Promise<void> {
+  if (ensureTablePromise) return ensureTablePromise
+
+  ensureTablePromise = db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS rate_limits (
+        key TEXT NOT NULL,
+        window_seconds INTEGER NOT NULL,
+        window_start INTEGER NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (key, window_seconds, window_start)
+      )`
+    )
+    .run()
+    .then(() => undefined)
+    .catch(() => undefined)
+
+  return ensureTablePromise
+}
+
+function getWindowStart(now: number, windowSeconds: number): number {
+  const windowMs = windowSeconds * 1000
+  return Math.floor(now / windowMs) * windowMs
+}
+
+async function checkAndRecord(
+  db: D1Database,
+  key: string,
+  limit: number,
+  windowSeconds: number
+): Promise<RateLimitResult> {
   const now = Date.now()
+  const windowStart = getWindowStart(now, windowSeconds)
+  const resetAt = windowStart + windowSeconds * 1000
 
   try {
-    // Get current rate limit data
-    const data = await kv.get(kvKey, 'json') as { count: number; reset_at: number } | null
+    await ensureTable(db)
 
-    // If no data or window expired, create new window
-    if (!data || data.reset_at < now) {
-      const resetAt = now + config.window * 1000
-      await kv.put(
-        kvKey,
-        JSON.stringify({ count: 1, reset_at: resetAt }),
-        { expirationTtl: config.window + 10 } // Add 10 seconds buffer
+    // Atomic upsert + increment; count is the *new* count after this request.
+    const row = await db
+      .prepare(
+        `INSERT INTO rate_limits (key, window_seconds, window_start, count, updated_at)
+         VALUES (?, ?, ?, 1, ?)
+         ON CONFLICT(key, window_seconds, window_start)
+         DO UPDATE SET count = count + 1, updated_at = excluded.updated_at
+         RETURNING count`
       )
-      return {
-        allowed: true,
-        remaining: config.limit - 1,
-        resetAt,
-      }
-    }
+      .bind(key, windowSeconds, windowStart, now)
+      .first<{ count: number }>()
 
-    // Check if limit exceeded
-    if (data.count >= config.limit) {
-      return {
-        allowed: false,
-        remaining: 0,
-        resetAt: data.reset_at,
-      }
-    }
-
-    // Increment counter
-    const newCount = data.count + 1
-    await kv.put(
-      kvKey,
-      JSON.stringify({ count: newCount, reset_at: data.reset_at }),
-      { expirationTtl: Math.ceil((data.reset_at - now) / 1000) + 10 }
-    )
+    const count = Number(row?.count || 0)
+    const allowed = count <= limit
+    const remaining = Math.max(0, limit - count)
 
     return {
-      allowed: true,
-      remaining: config.limit - newCount,
-      resetAt: data.reset_at,
+      allowed,
+      remaining,
+      resetAt,
+      retryAfter: allowed ? undefined : Math.max(0, Math.ceil((resetAt - now) / 1000)),
     }
-  } catch (error) {
-    console.error('Rate limit check error:', error)
-    // On error, allow the request to avoid blocking legitimate users
-    return {
-      allowed: true,
-      remaining: config.limit,
-      resetAt: now + config.window * 1000,
-    }
+  } catch {
+    // Fail-open to avoid accidental outage.
+    return { allowed: true, remaining: limit, resetAt }
   }
 }
 
-/**
- * Get client IP address from request
- */
 export function getClientIP(request: Request): string {
-  // Try Cloudflare headers first
   const cfIP = request.headers.get('CF-Connecting-IP')
   if (cfIP) return cfIP
 
-  // Try X-Forwarded-For
   const xForwardedFor = request.headers.get('X-Forwarded-For')
   if (xForwardedFor) {
     return xForwardedFor.split(',')[0].trim()
   }
 
-  // Try X-Real-IP
   const xRealIP = request.headers.get('X-Real-IP')
   if (xRealIP) return xRealIP
 
-  // Fallback
   return 'unknown'
 }
 
-/**
- * Rate limit middleware factory
- * Creates a rate limiting middleware with specified config
- */
 export function createRateLimiter(
   getKey: (context: RateLimiterContext) => string,
   limit: number,
@@ -120,13 +101,8 @@ export function createRateLimiter(
 ): PagesFunction<Env> {
   return async (context) => {
     const key = getKey(context)
-    const result = await checkRateLimit(context.env.TMARKS_KV, {
-      key,
-      limit,
-      window: windowSeconds,
-    })
+    const result = await checkAndRecord(context.env.DB, key, limit, windowSeconds)
 
-    // Add rate limit headers
     const headers: Record<string, string> = {
       'X-RateLimit-Limit': String(limit),
       'X-RateLimit-Remaining': String(result.remaining),
@@ -134,7 +110,7 @@ export function createRateLimiter(
     }
 
     if (!result.allowed) {
-      const retryAfter = Math.ceil((result.resetAt - Date.now()) / 1000)
+      const retryAfter = result.retryAfter ?? 0
       return new Response(
         JSON.stringify({
           code: 'RATE_LIMIT_EXCEEDED',
@@ -152,39 +128,27 @@ export function createRateLimiter(
       )
     }
 
-    // Continue to next middleware
     const response = await context.next()
-
-    // Add rate limit headers to response
-    Object.entries(headers).forEach(([key, value]) => {
-      response.headers.set(key, value)
-    })
-
+    Object.entries(headers).forEach(([k, v]) => response.headers.set(k, v))
     return response
   }
 }
 
-/**
- * Rate limiter for login endpoint (取消限制)
- */
 export const loginRateLimiter = createRateLimiter(
   (context) => {
     const ip = getClientIP(context.request)
     return `login:${ip}`
   },
-  999999, // 取消限制
+  30,
   60
 )
 
-/**
- * Rate limiter for bookmarks/filter endpoints (取消限制)
- */
 export const filterRateLimiter = createRateLimiter(
   (context) => {
-    // Assumes user_id is available in context.data (from auth middleware)
     const userId = context.data?.user_id || getClientIP(context.request)
     return `filter:${userId}`
   },
-  999999, // 取消限制
+  600,
   60
 )
+

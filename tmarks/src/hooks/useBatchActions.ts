@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { tabGroupsService } from '@/services/tab-groups'
 import type { TabGroup, TabGroupItem } from '@/lib/types'
 import { useToastStore } from '@/stores/toastStore'
+import { useInvalidateTabGroups } from './useTabGroupsQuery'
 import { logger } from '@/lib/logger'
 
 interface UseBatchActionsProps {
@@ -33,6 +34,7 @@ export function useBatchActions({
 }: UseBatchActionsProps) {
   const { t } = useTranslation('tabGroups')
   const { success, error: showError } = useToastStore()
+  const invalidateTabGroups = useInvalidateTabGroups()
 
   const handleBatchDelete = () => {
     if (selectedItems.size === 0) return
@@ -60,6 +62,7 @@ export function useBatchActions({
             }))
           )
 
+          await invalidateTabGroups()
           setSelectedItems(new Set())
           success(t('message.batchDeleteSuccess'))
         } catch (err) {
@@ -76,7 +79,7 @@ export function useBatchActions({
     try {
       await Promise.all(
         Array.from(selectedItems).map((itemId) =>
-          tabGroupsService.updateTabGroupItem(itemId, { is_pinned: 1 })
+          tabGroupsService.updateTabGroupItem(itemId, { is_pinned: true })
         )
       )
 
@@ -84,11 +87,12 @@ export function useBatchActions({
         prev.map((group) => ({
           ...group,
           items: group.items?.map((item) =>
-            selectedItems.has(item.id) ? { ...item, is_pinned: 1 } : item
+            selectedItems.has(item.id) ? { ...item, is_pinned: true } : item
           ),
         }))
       )
 
+      await invalidateTabGroups()
       setSelectedItems(new Set())
       success(t('message.batchPinSuccess'))
     } catch (err) {
@@ -103,7 +107,7 @@ export function useBatchActions({
     try {
       await Promise.all(
         Array.from(selectedItems).map((itemId) =>
-          tabGroupsService.updateTabGroupItem(itemId, { is_todo: 1 })
+          tabGroupsService.updateTabGroupItem(itemId, { is_todo: true })
         )
       )
 
@@ -111,11 +115,12 @@ export function useBatchActions({
         prev.map((group) => ({
           ...group,
           items: group.items?.map((item) =>
-            selectedItems.has(item.id) ? { ...item, is_todo: 1 } : item
+            selectedItems.has(item.id) ? { ...item, is_todo: true } : item
           ),
         }))
       )
 
+      await invalidateTabGroups()
       setSelectedItems(new Set())
       success(t('message.batchTodoSuccess'))
     } catch (err) {
@@ -145,8 +150,8 @@ export function useBatchActions({
 
     selectedItemsData.forEach((item, index) => {
       markdown += `${index + 1}. [${item.title}](${item.url})\n`
-      if (item.is_pinned === 1) markdown += `   - 📌 ${t('item.pinned')}\n`
-      if (item.is_todo === 1) markdown += `   - ✅ ${t('item.todo')}\n`
+      if (item.is_pinned) markdown += `   - 📌 ${t('item.pinned')}\n`
+      if (item.is_todo) markdown += `   - ✅ ${t('item.todo')}\n`
       markdown += '\n'
     })
 

@@ -29,7 +29,7 @@ export const buildConfig = {
       // Manifest 文件路径
       manifest: 'manifest.json',
       // 输出文件名
-      outputFile: 'tmarks-extension-chrome.zip',
+      outputFile: 'tmarks-extension-newtab-recovery-chrome.zip',
       // 图标颜色（用于文档）
       color: 'blue',
       // 是否启用

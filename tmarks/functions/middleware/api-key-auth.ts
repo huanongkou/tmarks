@@ -1,11 +1,11 @@
 /**
  * API Key Authentication Middleware
- * 用于验证和授权 API Key 请求
+ * Validates API Key and checks permissions
  */
 
 import { Context } from 'hono'
 import { validateApiKey, checkPermission, updateLastUsed } from '../lib/api-key/validator'
-import { checkRateLimit, recordRequest } from '../lib/api-key/rate-limiter'
+import { consumeRateLimit } from '../lib/api-key/rate-limiter'
 import { logApiKeyUsage } from '../lib/api-key/logger'
 
 interface ApiKeyAuthOptions {
@@ -13,15 +13,15 @@ interface ApiKeyAuthOptions {
 }
 
 /**
- * API Key 认证中间件
- * @param options 配置选项
- * @returns 中间件函数
+ * Create API Key authentication middleware
+ * @param options Configuration options
+ * @returns Middleware function
  */
 export function requireApiKey(options: ApiKeyAuthOptions) {
   return async (c: Context, next: () => Promise<void>) => {
     const { requiredPermission } = options
 
-    // 1. 获取 API Key
+    // 1. Extract API Key
     const apiKey = c.req.header('X-API-Key')
 
     if (!apiKey) {
@@ -36,7 +36,7 @@ export function requireApiKey(options: ApiKeyAuthOptions) {
       )
     }
 
-    // 2. 验证 API Key
+    // 2. Validate API Key
     const validation = await validateApiKey(apiKey, c.env.DB)
 
     if (!validation.valid || !validation.data || !validation.permissions) {
@@ -53,7 +53,7 @@ export function requireApiKey(options: ApiKeyAuthOptions) {
 
     const { data: keyData, permissions } = validation
 
-    // 3. 检查权限
+    // 3. Check permissions
     if (!checkPermission(permissions, requiredPermission)) {
       return c.json(
         {
@@ -68,53 +68,42 @@ export function requireApiKey(options: ApiKeyAuthOptions) {
       )
     }
 
-    // 4. 检查速率限制（如果未配置 KV，则跳过限流，但仍允许请求）
-    const kv = c.env.TMARKS_KV
-
-    if (kv) {
-      const rateLimitResult = await checkRateLimit(keyData.id, kv)
-
-      if (!rateLimitResult.allowed) {
-        // 设置速率限制响应头
-        c.header('X-RateLimit-Limit', String(rateLimitResult.limit))
-        c.header('X-RateLimit-Remaining', String(rateLimitResult.remaining))
-        c.header('X-RateLimit-Reset', String(rateLimitResult.reset))
-
-        if (rateLimitResult.retryAfter) {
-          c.header('Retry-After', String(rateLimitResult.retryAfter))
-        }
-
-        return c.json(
-          {
-            error: {
-              code: 'RATE_LIMIT_EXCEEDED',
-              message: 'Rate limit exceeded',
-              retry_after: rateLimitResult.retryAfter,
-            },
+    // 4. Rate limiting (D1 based)
+    const rateLimitResult = await consumeRateLimit(keyData.id, c.env.DB)
+    if (!rateLimitResult.allowed) {
+      return c.json(
+        {
+          error: {
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: 'Too many requests. Please try again later.',
+            retry_after: rateLimitResult.retryAfter || 0,
           },
-          429
-        )
-      }
-
-      // 5. 记录请求
-      await recordRequest(keyData.id, kv)
+        },
+        429,
+        {
+          'Retry-After': String(rateLimitResult.retryAfter || 0),
+          'X-RateLimit-Limit': String(rateLimitResult.limit),
+          'X-RateLimit-Remaining': String(rateLimitResult.remaining),
+          'X-RateLimit-Reset': String(Math.ceil(rateLimitResult.reset / 1000)),
+        }
+      )
     }
 
-    // 6. 获取请求 IP
+    // 5. Get request IP
     const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null
 
-    // 7. 更新最后使用信息
+    // 6. Update last used timestamp
     await updateLastUsed(keyData.id, ip, c.env.DB)
 
-    // 8. 传递用户信息到后续处理
+    // 7. Set context variables
     c.set('user_id', keyData.user_id)
     c.set('api_key_id', keyData.id)
     c.set('api_key_permissions', permissions)
 
-    // 9. 继续处理请求
+    // 8. Continue to next handler
     await next()
 
-    // 10. 请求完成后记录日志
+    // 9. Log API usage
     const status = c.res.status
     const endpoint = c.req.path
     const method = c.req.method
@@ -130,17 +119,12 @@ export function requireApiKey(options: ApiKeyAuthOptions) {
       },
       c.env.DB
     )
-
-    // 11. 添加速率限制响应头
-    c.header('X-RateLimit-Limit', String(rateLimitResult.limit))
-    c.header('X-RateLimit-Remaining', String(rateLimitResult.remaining))
-    c.header('X-RateLimit-Reset', String(rateLimitResult.reset))
   }
 }
 
 /**
- * 可选的 API Key 认证
- * 如果提供了 API Key 则验证，否则继续（用于可选认证的端点）
+ * Optional API Key authentication middleware
+ * Validates API Key if present, continues without auth if not provided
  */
 export function optionalApiKey() {
   return async (c: Context, next: () => Promise<void>) => {

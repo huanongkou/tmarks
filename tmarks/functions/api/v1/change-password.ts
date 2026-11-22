@@ -1,7 +1,7 @@
 /**
- * 修改密码 API
- * 路径: /api/v1/change-password
- * 认证: JWT Token
+ * Change Password API
+ * Path: /api/v1/change-password
+ * Auth: JWT Token
  */
 
 import type { PagesFunction } from '@cloudflare/workers-types'
@@ -15,7 +15,7 @@ interface ChangePasswordRequest {
   new_password: string
 }
 
-// POST /api/v1/change-password - 修改密码
+// POST /api/v1/change-password - Change password
 export const onRequestPost: PagesFunction<Env, RouteParams, AuthContext>[] = [
   requireAuth,
   async (context) => {
@@ -24,17 +24,17 @@ export const onRequestPost: PagesFunction<Env, RouteParams, AuthContext>[] = [
     try {
       const body = (await context.request.json()) as ChangePasswordRequest
 
-      // 验证请求参数
+      // Validate request parameters
       if (!body.current_password || !body.new_password) {
-        return badRequest('当前密码和新密码不能为空')
+        return badRequest('Current password and new password are required')
       }
 
-      // 验证新密码长度
+      // Validate new password length
       if (body.new_password.length < 6) {
-        return badRequest('新密码至少需要 6 个字符')
+        return badRequest('New password must be at least 6 characters')
       }
 
-      // 获取用户当前密码哈希
+      // Get user's current password hash
       const user = await context.env.DB.prepare(
         'SELECT password_hash FROM users WHERE id = ?'
       )
@@ -42,23 +42,23 @@ export const onRequestPost: PagesFunction<Env, RouteParams, AuthContext>[] = [
         .first<{ password_hash: string }>()
 
       if (!user) {
-        return unauthorized('用户不存在')
+        return unauthorized('User not found')
       }
 
-      // 验证当前密码
+      // Verify current password
       const isCurrentPasswordValid = await verifyPassword(
         body.current_password,
         user.password_hash
       )
 
       if (!isCurrentPasswordValid) {
-        return unauthorized('当前密码不正确')
+        return unauthorized('Current password is incorrect')
       }
 
-      // 生成新密码哈希
+      // Generate new password hash
       const newPasswordHash = await hashPassword(body.new_password)
 
-      // 更新密码
+      // Update password
       const now = new Date().toISOString()
       await context.env.DB.prepare(
         'UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?'
@@ -67,11 +67,11 @@ export const onRequestPost: PagesFunction<Env, RouteParams, AuthContext>[] = [
         .run()
 
       return success({
-        message: '密码修改成功',
+        message: 'Password changed successfully',
       })
     } catch (error) {
       console.error('Change password error:', error)
-      return internalError('密码修改失败')
+      return internalError('Failed to change password')
     }
   },
 ]

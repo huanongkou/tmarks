@@ -14,18 +14,26 @@
     "statistics": "数据分析",
     "language": "语言"
   },
+  "navGroup": {
+    "account": "账户与安全",
+    "features": "功能",
+    "integration": "集成",
+    "dataAndShare": "数据与分享"
+  },
   "action": {
     "save": "保存设置",
     "saving": "保存中...",
     "reset": "重置",
-    "logout": "登出"
+    "logout": "登出",
+    "discard": "放弃"
   },
   "message": {
     "saveSuccess": "设置已保存",
     "saveFailed": "保存失败",
     "saveFailedWithError": "保存失败：{{error}}",
     "resetSuccess": "已重置为上次保存的设置",
-    "logoutFailed": "登出失败"
+    "logoutFailed": "登出失败",
+    "unsavedChanges": "有未保存的更改"
   },
   "language": {
     "title": "语言设置",
@@ -311,15 +319,18 @@
       "currentUsage": "当前使用",
       "unlimited": "无限制"
     },
-    "importExport": {
-      "title": "数据导入导出",
-      "description": "导入、导出和备份你的书签数据",
-      "export": "导出数据",
-      "import": "导入数据"
+    "export": {
+      "title": "导出数据",
+      "description": "将书签数据导出为文件进行备份",
+      "tip1": "包含完整数据，适合备份和迁移",
+      "tip2": "可选择包含标签、元数据等信息",
+      "htmlTip1": "兼容浏览器标准格式",
+      "htmlTip2": "可直接导出为浏览器书签格式",
+      "htmlTip3": "保留文件夹结构和书签层级"
     },
+    "exportSuccess": "导出成功：{{details}}",
     "lastOperation": {
       "export": "数据导出",
-      "import": "数据导入",
       "cleanup": "快照清理"
     },
     "snapshotManagement": {
@@ -335,22 +346,6 @@
       "jsonTitle": "JSON 格式",
       "htmlTitle": "HTML 格式"
     },
-    "importFeature": {
-      "title": "导入功能",
-      "description": "从多种来源导入书签数据",
-      "supportedFormats": "支持的格式",
-      "smartProcessing": "智能处理",
-      "formatTip1": "浏览器导出的 HTML 书签文件",
-      "formatTip2": "JSON 格式的书签数据",
-      "formatTip3": "自动检测和跳过重复书签",
-      "formatTip4": "可将文件夹结构转换为标签",
-      "processTip1": "支持批量处理大文件",
-      "processTip2": "自动提取书签元数据",
-      "processTip3": "保留创建时间和描述信息",
-      "processTip4": "显示详细的导入结果报告"
-    },
-    "importSuccess": "成功导入 {{success}} 个书签，创建 {{tags}} 个标签{{failed}}",
-    "importFailed": "，{{count}} 个失败",
     "fetchBookmarksFailed": "获取书签列表失败",
     "cleanSnapshotsFailed": "清理快照失败",
     "cleanSnapshotsSuccess": "成功清理 {{count}} 条孤立快照记录",
@@ -364,27 +359,15 @@
       "tip2": "删除 R2 文件不存在的数据库记录",
       "tip3": "自动更新书签的快照计数",
       "tip4": "适用于手动删除 R2 文件后的数据修复"
-    },
-    "export": {
-      "tip1": "包含完整数据，适合备份和迁移",
-      "tip2": "可选择包含标签、元数据等信息",
-      "tip3": "支持重新导入到本系统",
-      "htmlTip1": "兼容浏览器标准格式",
-      "htmlTip2": "可直接导入 Chrome、Firefox、Edge 等浏览器",
-      "htmlTip3": "保留文件夹结构和书签层级"
-    },
-    "aiSettings": {
-      "title": "AI 智能整理",
-      "description": "配置 AI 服务，用于导入书签时的智能标签生成和分类"
     }
   },
   "browser": {
     "title": "浏览器设置",
     "download": {
       "title": "浏览器插件下载",
-      "description": "选择您的浏览器，下载对应的扩展程序",
+      "description": "下载 Chrome/Chromium 通用扩展（适用于 Chromium 内核浏览器）",
       "clickToDownload": "点击下载",
-      "tip": "💡 提供 8 个浏览器专用版本，也可以使用 Chrome 通用版（支持所有基于 Chrome 的浏览器）"
+      "tip": "💡 目前仅提供 Chrome/Chromium 通用版本（Chrome、Edge、Brave、Opera、360、QQ、搜狗等）"
     },
     "permissions": {
       "title": "浏览器权限设置",
@@ -427,7 +410,7 @@
       "step2Title": "解压文件",
       "step2Desc": "将下载的 zip 文件解压到任意文件夹（建议放在不会删除的位置）",
       "step3Title": "打开扩展管理页面",
-      "step3Desc": "Chrome: chrome://extensions/ | Edge: edge://extensions/ | Firefox: about:debugging",
+      "step3Desc": "Chrome: chrome://extensions/ | Edge: edge://extensions/",
       "step4Title": "启用开发者模式",
       "step4Desc": "在扩展管理页面右上角，打开\"开发者模式\"开关",
       "step5Title": "加载插件",
@@ -442,7 +425,7 @@
       "howToGetApiKey": "Q: 如何获取 API Key？",
       "howToGetApiKeyAnswer": "A: 在通用设置的\"API\"标签页中创建一个新的 API Key 并复制到插件配置中。",
       "supportedBrowsers": "Q: 插件支持哪些浏览器？",
-      "supportedBrowsersAnswer": "A: 支持 Chrome、Edge、Firefox、Brave、Opera、360、QQ、搜狗等主流浏览器。",
+      "supportedBrowsersAnswer": "A: 目前仅提供 Chrome/Chromium 版本，支持 Chrome、Edge、Brave、Opera、360、QQ、搜狗等 Chromium 内核浏览器。",
       "whereToView": "保存的标签页组在哪里查看？",
       "whereToViewAnswer": "在 TMarks 网站的\"标签页\"页面可以查看和管理所有保存的标签页组。"
     },
@@ -550,7 +533,7 @@
   "ai": {
     "custom": "自定义",
     "title": "AI 服务配置",
-    "description": "配置 AI 服务用于智能导入、标签推荐等功能",
+    "description": "配置 AI 服务用于标签推荐、智能分类等功能",
     "enable": "启用 AI 功能",
     "enabled": "已开启",
     "enableHint": "开启后可使用 AI 智能整理等功能",
@@ -579,7 +562,7 @@
       "tip1": "API Key 会加密存储在服务器，不会泄露",
       "tip2": "AI 调用直接从浏览器发起，数据不经过 TMarks 服务器",
       "tip3": "推荐使用 DeepSeek 或 gpt-4o-mini，性价比高",
-      "tip4": "导入 100 个书签约消耗 0.01-0.05 美元"
+      "tip4": "处理 100 个书签约消耗 0.01-0.05 美元"
     }
   }
 }

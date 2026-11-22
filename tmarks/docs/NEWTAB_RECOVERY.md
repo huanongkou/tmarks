@@ -1,6 +1,6 @@
 # 新标签页网址恢复
 
-Cloudflare Pages 部署这次提交后，更新扩展（本地使用 `tab/dist`，网站下载使用新的 Chrome 扩展包），保持原来的 TMarks 服务地址和 API Key。
+Cloudflare Pages 部署这次提交后，更新扩展（本地使用 `tab/dist`，网站下载使用新标签页恢复版 `tmarks-extension-newtab-recovery-chrome.zip`），保持原来的 TMarks 服务地址和 API Key。
 
 - 扩展设置 →「立即同步」：恢复新标签页网址，并同步普通书签、标签。
 - 新标签页 → 设置 → 同步 →「从云端恢复新标签页网址」：单独恢复新标签页网址，不依赖普通书签同步成功。
@@ -14,3 +14,5 @@ Cloudflare Pages 部署这次提交后，更新扩展（本地使用 `tab/dist`�
 新版扩展上传前检查服务端 `recovery_version`，未更新的服务端不会收到新版扩展的上传。若恢复提示等待 Cloudflare 部署，请确认当前服务地址对应的 Pages 项目已部署到本次提交。
 
 验证（Node.js 22.13+）：在 `tab` 目录执行 `pnpm test:sync` 和 `pnpm build:only`。测试使用内存 SQLite 执行真实查询，覆盖分组为空、旧版空上传、增量备份、用户隔离、输入校验、重复恢复和恢复失败时保留本地数据。
+
+上游最新版已移除 `tab` 源码和 NewTab API。本分支保留扩展源码、恢复接口和 0100/0101 表定义；网站默认 Chrome 下载包采用上游最新版，恢复版以独立文件提供，避免覆盖上游发行版。

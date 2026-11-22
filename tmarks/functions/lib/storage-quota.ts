@@ -2,31 +2,30 @@ import type { Env } from './types'
 import type { D1Database } from '@cloudflare/workers-types'
 
 /**
- * R2 存储配额相关工具
+ * R2 Storage Quota Management
  *
- * 目标：限制在 R2 中的总占用空间（快照 + 封面图）不超过指定上限
- * 实现：依赖 D1 中 bookmark_snapshots.file_size 和 bookmark_images.file_size 的汇总
+ * Calculation method: R2 total storage (snapshots + images)
+ * Data source: Query D1 database bookmark_snapshots.file_size and bookmark_images.file_size
  */
 
-// 默认总配额逻辑：不配置或配置为 <= 0 时视为「无限制」
+// Note: If not configured or <= 0, means "unlimited"
 type UsageRow = {
   total: number | null
 }
 
 /**
- * 从环境变量读取 R2 总配额（字节）
+ * Get R2 storage quota limit (bytes)
  *
- * 约定：
- * - 未设置 / 为空: 视为「无限制」
- * - 解析失败: 视为「无限制」
- * - <= 0: 视为「无限制」
- * - > 0: 使用该值作为总配额
+ * Rules:
+ * - Not configured/empty: "unlimited"
+ * - Invalid format: "unlimited"
+ * - <= 0: "unlimited"
+ * - > 0: Use configured value
  */
 export function getR2MaxTotalBytes(env: Env): number {
   const raw = env.R2_MAX_TOTAL_BYTES
 
   if (!raw || raw.trim() === '') {
-    // 不配置则不限制
     return Number.POSITIVE_INFINITY
   }
 
@@ -38,7 +37,6 @@ export function getR2MaxTotalBytes(env: Env): number {
   }
 
   if (parsed <= 0) {
-    // 小于等于 0 视为不限制
     return Number.POSITIVE_INFINITY
   }
 
@@ -46,11 +44,11 @@ export function getR2MaxTotalBytes(env: Env): number {
 }
 
 /**
- * 计算当前在 R2 中的大致占用（字节）
+ * Get current R2 storage usage (bytes)
  *
- * 说明：
- * - bookmark_snapshots.file_size：快照 HTML +（在 V2 中）图片总大小
- * - bookmark_images.file_size：封面图文件大小（按 image_hash 去重）
+ * Data sources:
+ * - bookmark_snapshots.file_size: Snapshot HTML + images (V2 format)
+ * - bookmark_images.file_size: Cover images (deduplicated by image_hash)
  */
 export async function getCurrentR2UsageBytes(db: D1Database): Promise<number> {
   const snapshotRow = await db
@@ -80,7 +78,7 @@ export interface R2QuotaCheckResult {
 }
 
 /**
- * 检查在写入 additionalBytes 之后，是否仍在配额之内
+ * Check if adding additionalBytes would exceed quota
  */
 export async function checkR2Quota(
   db: D1Database,
@@ -89,10 +87,9 @@ export async function checkR2Quota(
 ): Promise<R2QuotaCheckResult> {
   const limitBytes = getR2MaxTotalBytes(env)
 
-  // 无限配额：直接允许
+  // Optimization: If unlimited, skip D1 query
   if (!Number.isFinite(limitBytes)) {
-    const usedBytes = await getCurrentR2UsageBytes(db)
-    return { allowed: true, limitBytes, usedBytes }
+    return { allowed: true, limitBytes, usedBytes: 0 }
   }
 
   const usedBytes = await getCurrentR2UsageBytes(db)
@@ -104,4 +101,3 @@ export async function checkR2Quota(
 
   return { allowed: true, limitBytes, usedBytes }
 }
-

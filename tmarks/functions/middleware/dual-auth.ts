@@ -1,12 +1,12 @@
 /**
  * Dual Authentication Middleware
- * 支持 JWT Token 和 API Key 两种认证方式
+ * Supports both JWT Token and API Key authentication methods
  */
 
 import type { PagesFunction } from '@cloudflare/workers-types'
 import type { Env, RouteParams } from '../lib/types'
 import { validateApiKey } from '../lib/api-key/validator'
-import { checkRateLimit, recordRequest } from '../lib/api-key/rate-limiter'
+import { consumeRateLimit } from '../lib/api-key/rate-limiter'
 import { hasPermission } from '../../shared/permissions'
 import { unauthorized, forbidden, tooManyRequests } from '../lib/response'
 import { verifyJWT } from '../lib/jwt'
@@ -19,8 +19,8 @@ export interface DualAuthContext {
 }
 
 /**
- * 创建双重认证中间件
- * @param requiredPermission 需要的权限（仅用于 API Key 认证）
+ * Create dual authentication middleware
+ * @param requiredPermission Required permission (only for API Key authentication)
  */
 export function requireDualAuth(
   requiredPermission: string
@@ -29,11 +29,11 @@ export function requireDualAuth(
     const request = context.request
 
     try {
-      // 1. 检查是否有 API Key
+      // 1. Check for API Key
       const apiKey = request.headers.get('X-API-Key')
       
       if (apiKey) {
-        // API Key 认证流程
+        // API Key authentication flow
         const validation = await validateApiKey(apiKey, context.env.DB)
 
         if (!validation.valid || !validation.data || !validation.permissions) {
@@ -45,7 +45,7 @@ export function requireDualAuth(
 
         const { data: keyData, permissions } = validation
 
-        // 检查权限
+        // Check permissions
         if (!hasPermission(permissions, requiredPermission)) {
           return forbidden({
             code: 'INSUFFICIENT_PERMISSIONS',
@@ -55,45 +55,37 @@ export function requireDualAuth(
           })
         }
 
-        // 检查速率限制（如果未配置 KV，则跳过限流，但仍允许请求）
-        const kv = context.env.TMARKS_KV
-
-        if (kv) {
-          const rateLimitResult = await checkRateLimit(keyData.id, kv)
-
-          if (!rateLimitResult.allowed) {
-            return tooManyRequests(
-              {
-                code: 'RATE_LIMIT_EXCEEDED',
-                message: 'Rate limit exceeded',
-                retry_after: rateLimitResult.retryAfter,
-              },
-              {
-                'X-RateLimit-Limit': String(rateLimitResult.limit),
-                'X-RateLimit-Remaining': String(rateLimitResult.remaining),
-                'X-RateLimit-Reset': String(rateLimitResult.reset),
-                'Retry-After': String(rateLimitResult.retryAfter || 60),
-              }
-            )
+        // Rate limiting (D1)
+        const rateLimitResult = await consumeRateLimit(keyData.id, context.env.DB)
+        if (!rateLimitResult.allowed) {
+          const headers: Record<string, string> = {
+            'Retry-After': String(rateLimitResult.retryAfter || 0),
+            'X-RateLimit-Limit': String(rateLimitResult.limit),
+            'X-RateLimit-Remaining': String(rateLimitResult.remaining),
+            'X-RateLimit-Reset': String(Math.ceil(rateLimitResult.reset / 1000)),
           }
-
-          // 记录请求
-          await recordRequest(keyData.id, kv)
+          return tooManyRequests(
+            {
+              code: 'RATE_LIMIT_EXCEEDED',
+              message: 'Too many requests. Please try again later.',
+            },
+            headers
+          )
         }
 
-        // 获取请求 IP
+        // Get request IP
         const ip =
           request.headers.get('CF-Connecting-IP') ||
           request.headers.get('X-Forwarded-For') ||
           null
 
-        // 传递用户信息到 context.data
+        // Pass user info to context.data
         context.data.user_id = keyData.user_id
         context.data.auth_type = 'api_key'
         context.data.api_key_id = keyData.id
         context.data.api_key_permissions = permissions
 
-        // 更新最后使用信息（异步）
+        // Update last used info (async)
         context.waitUntil(
           (async () => {
             try {
@@ -111,7 +103,7 @@ export function requireDualAuth(
         return context.next()
       }
 
-      // 2. 检查是否有 JWT Token
+      // 2. Check for JWT Token
       const authHeader = request.headers.get('Authorization')
       
       if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -127,7 +119,7 @@ export function requireDualAuth(
             })
           }
 
-          // 传递用户信息到 context.data
+          // Pass user info to context.data
           context.data.user_id = payload.sub
           context.data.auth_type = 'jwt'
 
@@ -140,7 +132,7 @@ export function requireDualAuth(
         }
       }
 
-      // 3. 没有任何认证信息
+      // 3. No authentication provided
       return unauthorized({
         code: 'MISSING_AUTH',
         message: 'Authentication required. Provide either X-API-Key header or Bearer token.',

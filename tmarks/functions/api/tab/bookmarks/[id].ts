@@ -1,7 +1,7 @@
 /**
- * 对外 API - 单个书签操作
- * 路径: /api/tab/bookmarks/:id
- * 认证: API Key (X-API-Key header)
+ *  API - 
+ * : /api/tab/bookmarks/:id
+ * : API Key (X-API-Key header)
  */
 
 import type { PagesFunction } from '@cloudflare/workers-types'
@@ -10,6 +10,7 @@ import { success, badRequest, notFound, noContent, internalError } from '../../.
 import { requireApiKeyAuth, ApiKeyAuthContext } from '../../../middleware/api-key-auth-pages'
 import { isValidUrl, sanitizeString } from '../../../lib/validation'
 import { normalizeBookmark } from '../../../lib/bookmark-utils'
+import { getValidTagIds, replaceBookmarkTags, replaceBookmarkTagsByNames } from '../../../lib/tags'
 import { invalidatePublicShareCache } from '../../shared/cache'
 
 interface UpdateBookmarkRequest {
@@ -18,14 +19,14 @@ interface UpdateBookmarkRequest {
   description?: string
   cover_image?: string
   favicon?: string
-  tag_ids?: string[]  // 兼容旧版：标签 ID 数组
-  tags?: string[]     // 新版：标签名称数组（推荐）
+  tag_ids?: string[]  // ： ID 
+  tags?: string[]     // ：（）
   is_pinned?: boolean
   is_archived?: boolean
   is_public?: boolean
 }
 
-// GET /api/bookmarks/:id - 获取单个书签详情
+// GET /api/bookmarks/:id - 
 export const onRequestGet: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[] = [
   requireApiKeyAuth('bookmarks.read'),
   async (context) => {
@@ -43,17 +44,15 @@ export const onRequestGet: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[] 
         return notFound('Bookmark not found')
       }
 
-      // 获取标签
       const { results: tags } = await context.env.DB.prepare(
         `SELECT t.id, t.name, t.color
          FROM tags t
          INNER JOIN bookmark_tags bt ON t.id = bt.tag_id
-         WHERE bt.bookmark_id = ? AND t.deleted_at IS NULL`
+         WHERE bt.bookmark_id = ? AND bt.user_id = ? AND t.deleted_at IS NULL`
       )
-        .bind(bookmarkId)
+        .bind(bookmarkId, userId)
         .all<{ id: string; name: string; color: string | null }>()
 
-      // 获取快照数量
       const snapshotCountResult = await context.env.DB.prepare(
         `SELECT COUNT(*) as count FROM bookmark_snapshots WHERE bookmark_id = ? AND user_id = ?`
       )
@@ -79,7 +78,7 @@ export const onRequestGet: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[] 
   },
 ]
 
-// PATCH /api/bookmarks/:id - 更新书签
+// PATCH /api/bookmarks/:id - 
 export const onRequestPatch: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[] = [
   requireApiKeyAuth('bookmarks.update'),
   async (context) => {
@@ -87,7 +86,6 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[
     const bookmarkId = context.params.id
 
     try {
-      // 检查书签是否存在
       const existing = await context.env.DB.prepare(
         'SELECT id FROM bookmarks WHERE id = ? AND user_id = ? AND deleted_at IS NULL'
       )
@@ -102,52 +100,39 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[
       const updates: string[] = []
       const values: SQLParam[] = []
 
-      // 标题
       if (body.title !== undefined) {
-        if (!body.title.trim()) {
-          return badRequest('Title cannot be empty')
-        }
+        if (!body.title.trim()) return badRequest('Title cannot be empty')
         updates.push('title = ?')
         values.push(sanitizeString(body.title, 500))
       }
 
-      // URL
       if (body.url !== undefined) {
-        if (!body.url.trim()) {
-          return badRequest('URL cannot be empty')
-        }
-        if (!isValidUrl(body.url)) {
-          return badRequest('Invalid URL format')
-        }
+        if (!body.url.trim()) return badRequest('URL cannot be empty')
+        if (!isValidUrl(body.url)) return badRequest('Invalid URL format')
         updates.push('url = ?')
         values.push(sanitizeString(body.url, 2000))
       }
 
-      // 描述
       if (body.description !== undefined) {
         updates.push('description = ?')
         values.push(body.description ? sanitizeString(body.description, 1000) : null)
       }
 
-      // 封面图
       if (body.cover_image !== undefined) {
         updates.push('cover_image = ?')
         values.push(body.cover_image ? sanitizeString(body.cover_image, 2000) : null)
       }
 
-      // Favicon
       if (body.favicon !== undefined) {
         updates.push('favicon = ?')
         values.push(body.favicon ? sanitizeString(body.favicon, 2000) : null)
       }
 
-      // 置顶
       if (body.is_pinned !== undefined) {
         updates.push('is_pinned = ?')
         values.push(body.is_pinned ? 1 : 0)
       }
 
-      // 归档
       if (body.is_archived !== undefined) {
         updates.push('is_archived = ?')
         values.push(body.is_archived ? 1 : 0)
@@ -172,51 +157,26 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[
           .run()
       }
 
-      // 更新标签关联
       if (body.tags !== undefined) {
-        // 新版：直接传标签名称，后端自动创建或链接
-        const { createOrLinkTags } = await import('../../../lib/tags')
-        
-        // 删除现有标签关联
-        await context.env.DB.prepare('DELETE FROM bookmark_tags WHERE bookmark_id = ?')
-          .bind(bookmarkId)
-          .run()
-        
-        // 创建或链接新标签
-        if (body.tags.length > 0) {
-          await createOrLinkTags(context.env.DB, bookmarkId, body.tags, userId)
-        }
+        await replaceBookmarkTagsByNames(context.env.DB, bookmarkId, body.tags, userId, now)
       } else if (body.tag_ids !== undefined) {
-        // 兼容旧版：传标签 ID
-        // 删除旧的标签关联
-        await context.env.DB.prepare('DELETE FROM bookmark_tags WHERE bookmark_id = ?')
-          .bind(bookmarkId)
-          .run()
-
-        // 添加新的标签关联
-        if (body.tag_ids.length > 0) {
-          for (const tagId of body.tag_ids) {
-            await context.env.DB.prepare(
-              'INSERT INTO bookmark_tags (bookmark_id, tag_id, user_id, created_at) VALUES (?, ?, ?, ?)'
-            )
-              .bind(bookmarkId, tagId, userId, now)
-              .run()
-          }
-        }
+        const validTagIds = await getValidTagIds(context.env.DB, userId, body.tag_ids)
+        await replaceBookmarkTags(context.env.DB, bookmarkId, userId, validTagIds, now)
       }
 
-      // 返回更新后的书签
-      const bookmarkRow = await context.env.DB.prepare('SELECT * FROM bookmarks WHERE id = ?')
-        .bind(bookmarkId)
+      const bookmarkRow = await context.env.DB.prepare(
+        'SELECT * FROM bookmarks WHERE id = ? AND user_id = ?'
+      )
+        .bind(bookmarkId, userId)
         .first<BookmarkRow>()
 
       const { results: tags } = await context.env.DB.prepare(
         `SELECT t.id, t.name, t.color
          FROM tags t
          INNER JOIN bookmark_tags bt ON t.id = bt.tag_id
-         WHERE bt.bookmark_id = ?`
+         WHERE bt.bookmark_id = ? AND bt.user_id = ?`
       )
-        .bind(bookmarkId)
+        .bind(bookmarkId, userId)
         .all<{ id: string; name: string; color: string | null }>()
 
       if (!bookmarkRow) {
@@ -236,7 +196,7 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[
   },
 ]
 
-// DELETE /api/bookmarks/:id - 删除书签
+// DELETE /api/bookmarks/:id - 
 export const onRequestDelete: PagesFunction<Env, RouteParams, ApiKeyAuthContext>[] = [
   requireApiKeyAuth('bookmarks.delete'),
   async (context) => {
@@ -256,16 +216,10 @@ export const onRequestDelete: PagesFunction<Env, RouteParams, ApiKeyAuthContext>
 
       const now = new Date().toISOString()
 
-      // 软删除
       await context.env.DB.prepare(
-        'UPDATE bookmarks SET deleted_at = ?, updated_at = ? WHERE id = ?'
+        'UPDATE bookmarks SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?'
       )
-        .bind(now, now, bookmarkId)
-        .run()
-
-      // 删除标签关联
-      await context.env.DB.prepare('DELETE FROM bookmark_tags WHERE bookmark_id = ?')
-        .bind(bookmarkId)
+        .bind(now, now, bookmarkId, userId)
         .run()
 
       await invalidatePublicShareCache(context.env, userId)

@@ -1,8 +1,8 @@
 import type { Bookmark, BookmarkRow } from './types'
 
 /**
- * 将数据库行转换为标准 Bookmark 对象
- * 处理 SQLite 的 0/1 到 boolean 的转换
+ *  Bookmark 
+
  */
 export function normalizeBookmark(row: BookmarkRow): Bookmark {
   return {

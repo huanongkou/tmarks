@@ -35,142 +35,35 @@ TMarks 是一个现代化的智能书签管理系统，结合 AI 技术自动生
 - **前端**: React 18/19 + TypeScript + Vite + TailwindCSS 4
 - **后端**: Cloudflare Workers + Pages Functions
 - **数据库**: Cloudflare D1 (SQLite)
-- **缓存**: Cloudflare KV
 - **快照存储**: Cloudflare R2（可选，用于存储网页快照 HTML 与图片，支持全局 7GB 配额限制）
 - **AI集成**: 支持 OpenAI、Anthropic、DeepSeek、智谱等 8+ 提供商
 
 ---
 
-## 🚀 快速开始
+## 🔌 浏览器扩展
 
-### 本地开发
+登录 TMarks 后，进入 **个人设置** 页面下载并安装浏览器扩展。
 
-```bash
-# 1. 克隆项目
-git clone https://github.com/ai-tmarks/tmarks.git
-cd tmarks
+### 扩展功能
 
-# 2. 安装依赖
-cd tmarks
-pnpm install
+- **快速保存书签** - 一键保存当前网页，AI 自动推荐标签
+- **标签页收纳** - 一键收纳所有标签页，改天再看
 
-# 3. 创建数据库并迁移
-wrangler d1 create tmarks-prod-db --local
-pnpm db:migrate:local
+### 支持浏览器
 
-# 4. 启动开发服务器
-pnpm dev
-# 访问 http://localhost:5173
-```
-
-### 浏览器扩展开发
-
-```bash
-# 1. 安装依赖
-cd tab
-pnpm install
-
-# 2. 启动开发模式
-pnpm dev
-
-# 3. 加载扩展
-# Chrome: chrome://extensions/ → 开发者模式 → 加载已解压的扩展程序 → 选择 tab/dist
-# Firefox: about:debugging → 临时载入附加组件 → 选择 tab/dist/manifest.json
-```
+Chrome / Edge / Opera / Brave / 360 / QQ / 搜狗
 
 ---
+
 
 ## 🚀 部署
 
-### 📹 视频教程
+📖 **详细部署文档**: [DEPLOYMENT.md](DEPLOYMENT.md)
 
-**完整部署教程视频**: [点击观看](https://bushutmarks.pages.dev/course/tmarks)
-
-跟随视频教程，3 分钟完成部署。
+📹 **视频教程**: [点击观看](https://bushutmarks.pages.dev/course/tmarks)（3 分钟完成部署）
 
 ---
-
-### 开源用户一页部署指南
-
-**前置条件**
-- 有 Cloudflare 账号
-- 有 GitHub 账号
-
----
-
-#### 1. 连接仓库并配置构建
-1. 在 GitHub 上 Fork 本仓库
-2. 打开 Cloudflare Dashboard → **Workers & Pages** → **Pages** → **创建项目**
-3. 选择「连接到 Git」，选中你的 Fork
-4. 构建配置：
-   - 根目录：`tmarks`
-   - 构建命令：`pnpm install && pnpm build:deploy`
-   - 构建输出目录：`.deploy`
-5. 保存并触发一次部署（第一次失败没关系，后面会修好）
-
-#### 2. 创建 Cloudflare 资源
-1. **D1 数据库（必需）**
-   - Workers & Pages → **D1 SQL Database** → Create database
-   - 名称：`tmarks-prod-db`
-2. **KV 命名空间（推荐）**
-   - Workers & Pages → **KV** → Create a namespace
-   - 名称：`TMARKS_KV`
-   - 不创建也能运行，但会失去 KV 缓存和限流保护
-3. **R2 存储桶（可选，快照用）**
-   - R2 对象存储 → 创建存储桶
-   - 名称：`tmarks-snapshots`
-   - 不创建则快照功能不可用，但其他功能正常
-
-#### 3. 在 Pages 项目中绑定资源
-进入 Pages 项目 → **设置 → 函数**：
-
-- D1 绑定：
-  - 新建 D1 绑定，变量名：`DB` → 选择 `tmarks-prod-db`
-- KV 绑定（如果创建了 KV）：
-  - 新建 KV 绑定，变量名：`TMARKS_KV` → 选择 `TMARKS_KV`
-- R2 绑定（如果创建了 R2）：
-  - 新建 R2 绑定，变量名：`SNAPSHOTS_BUCKET` → 选择 `tmarks-snapshots`
-
-> 没有 KV / R2 时，可以跳过对应绑定，应用仍然可以启动。
-
-#### 4. 配置环境变量
-进入 Pages 项目 → **设置 → 环境变量（生产环境）**，建议配置：
-
-- 业务相关：
-  - `ALLOW_REGISTRATION`：是否允许新用户注册，推荐 "true"
-    （设为非 "true"——包括 "false" 或留空——都会关闭注册；推荐的关闭方式是 **直接删除该变量**）
-  - `ENVIRONMENT`：运行环境，生产环境设为 `production`
-  - `JWT_ACCESS_TOKEN_EXPIRES_IN`：访问 Token 有效期，推荐 `365d`
-  - `JWT_REFRESH_TOKEN_EXPIRES_IN`：刷新 Token 有效期，推荐 `365d`
-- R2 相关（如果启用快照 / 封面图走 R2）：
-  - `R2_PUBLIC_URL`：**可选**，封面图使用 R2 存储时的对外访问域名（例如 `https://pub-xxxxx.r2.dev`）；快照本身通过 API 访问，不依赖该值
-  - `R2_MAX_TOTAL_BYTES`：R2 总存储上限（字节），可选；不配置或设为 `0` / 负数 表示不限制（如需限制可手动设置，例如约 7GiB）
-- 敏感变量（**只在 Dashboard 里配置，千万不要写入仓库**）：
-  - `JWT_SECRET`：JWT 签名密钥（建议 ≥ 48 位随机字符串）
-  - `ENCRYPTION_KEY`：数据加密密钥（建议 ≥ 48 位随机字符串）
-
-> 本地 / 自托管部署时，可参考 `tmarks/wrangler.toml.example` 中的 `[vars]` 示例，业务配置可直接照抄，敏感密钥仅在 Dashboard 中填写真实值。
-
-#### 5. 初始化数据库
-1. 打开 **Workers & Pages → D1 SQL Database**
-2. 进入 `tmarks-prod-db` → **Console**
-3. 打开仓库中的
- “tmarks/migrations/0001_d1_console.sql
-tmarks/migrations/0002_d1_console_ai_settings.sql
-tmarks/migrations/0100_d1_console.sql
-tmarks/migrations/0101_d1_console.sql”
-4. 复制全部 SQL，粘贴到控制台，点击 **Execute** 执行
-
-#### 6. 重新部署
-1. 回到 Pages 项目 → 部署
-2. 对之前失败的部署点击「重试」，或推送任意提交重新触发
-3. 构建成功后，就可以访问你的 TMarks 站点了 🎉
-
-> 之后更新：只要往 GitHub 推代码，Cloudflare 会自动重新构建和部署，之前配置的数据库 / KV / R2 / 环境变量都不会丢。
----
-
 
 ## 📄 许可证
-
 
 本项目采用 [MIT License](LICENSE) 开源协议。

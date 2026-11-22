@@ -1,7 +1,7 @@
 /**
- * 公开 API - 单个标签页项操作
- * 路径: /api/v1/tab-groups/items/:id
- * 认证: JWT Token (Bearer)
+ *  API - 
+ * : /api/v1/tab-groups/items/:id
+ * : JWT Token (Bearer)
  */
 
 import type { PagesFunction } from '@cloudflare/workers-types'
@@ -31,7 +31,7 @@ interface UpdateTabGroupItemRequest {
   position?: number
 }
 
-// PATCH /api/v1/tab-groups/items/:id - 更新标签页项
+// PATCH /api/v1/tab-groups/items/:id - 
 export const onRequestPatch: PagesFunction<Env, RouteParams, AuthContext>[] = [
   requireAuth,
   async (context) => {
@@ -104,21 +104,23 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, AuthContext>[] = [
         return badRequest('No fields to update')
       }
 
-      // Add item ID to params
-      params.push(itemId)
+      // Add item ID to params — use subquery to enforce ownership
+      params.push(itemId, item.group_id, userId)
 
-      // Execute update
+      // Execute update with ownership check via group
       await context.env.DB.prepare(
-        `UPDATE tab_group_items SET ${updates.join(', ')} WHERE id = ?`
+        `UPDATE tab_group_items SET ${updates.join(', ')} WHERE id = ? AND group_id IN (SELECT id FROM tab_groups WHERE id = ? AND user_id = ?)`
       )
         .bind(...params)
         .run()
 
       // Get updated item
       const updatedItem = await context.env.DB.prepare(
-        'SELECT * FROM tab_group_items WHERE id = ?'
+        `SELECT tgi.* FROM tab_group_items tgi
+         JOIN tab_groups tg ON tgi.group_id = tg.id
+         WHERE tgi.id = ? AND tg.user_id = ?`
       )
-        .bind(itemId)
+        .bind(itemId, userId)
         .first<TabGroupItemRow>()
 
       if (!updatedItem) {
@@ -136,7 +138,7 @@ export const onRequestPatch: PagesFunction<Env, RouteParams, AuthContext>[] = [
   },
 ]
 
-// DELETE /api/v1/tab-groups/items/:id - 删除标签页项
+// DELETE /api/v1/tab-groups/items/:id - 
 export const onRequestDelete: PagesFunction<Env, RouteParams, AuthContext>[] = [
   requireAuth,
   async (context) => {
@@ -162,9 +164,11 @@ export const onRequestDelete: PagesFunction<Env, RouteParams, AuthContext>[] = [
         return notFound('Tab group item not found')
       }
 
-      // Delete item
-      await context.env.DB.prepare('DELETE FROM tab_group_items WHERE id = ?')
-        .bind(itemId)
+      // Delete item with ownership check
+      await context.env.DB.prepare(
+        'DELETE FROM tab_group_items WHERE id = ? AND group_id IN (SELECT id FROM tab_groups WHERE id = ? AND user_id = ?)'
+      )
+        .bind(itemId, item.group_id, userId)
         .run()
 
       // Reorder remaining items

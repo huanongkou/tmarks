@@ -1,7 +1,7 @@
 /**
- * 书签回收站 API
- * 路径: /api/v1/bookmarks/trash
- * 认证: JWT Token (Bearer)
+
+ * : /api/v1/bookmarks/trash
+ * : JWT Token (Bearer)
  */
 
 import type { PagesFunction } from '@cloudflare/workers-types'
@@ -16,7 +16,6 @@ interface TrashQueryParams {
   sort?: string
 }
 
-// GET /api/v1/bookmarks/trash - 获取回收站书签列表
 export const onRequestGet: PagesFunction<Env, string, AuthContext>[] = [
   requireAuth,
   async (context) => {
@@ -30,7 +29,7 @@ export const onRequestGet: PagesFunction<Env, string, AuthContext>[] = [
     }
 
     try {
-      const pageSize = Math.min(Math.max(parseInt(params.page_size || '20'), 1), 100)
+      const pageSize = Math.min(Math.max(parseInt(params.page_size || '20', 10) || 20, 1), 100)
       const sort = params.sort === 'deleted_at_asc' ? 'ASC' : 'DESC'
 
       let query = `
@@ -39,7 +38,7 @@ export const onRequestGet: PagesFunction<Env, string, AuthContext>[] = [
       `
       const queryParams: (string | number)[] = [userId]
 
-      // 游标分页
+      // 
       if (params.page_cursor) {
         query += ` AND deleted_at < ?`
         queryParams.push(params.page_cursor)
@@ -52,11 +51,9 @@ export const onRequestGet: PagesFunction<Env, string, AuthContext>[] = [
         .bind(...queryParams)
         .all<BookmarkRow>()
 
-      // 检查是否有下一页
       const hasMore = bookmarks.length > pageSize
       const items = hasMore ? bookmarks.slice(0, pageSize) : bookmarks
 
-      // 获取每个书签的标签
       const bookmarksWithTags = await Promise.all(
         items.map(async (bookmark) => {
           const { results: tags } = await context.env.DB.prepare(
@@ -75,7 +72,7 @@ export const onRequestGet: PagesFunction<Env, string, AuthContext>[] = [
         })
       )
 
-      // 获取回收站总数
+      // 
       const countResult = await context.env.DB.prepare(
         'SELECT COUNT(*) as count FROM bookmarks WHERE user_id = ? AND deleted_at IS NOT NULL'
       )
