@@ -25,7 +25,7 @@ export function CacheStatusSection({
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">缓存状态</h2>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-            查看本地缓存概况并手动触发一次同步。
+            同步书签与标签，并将云端新标签页网址恢复到默认首页分组。
           </p>
         </div>
 

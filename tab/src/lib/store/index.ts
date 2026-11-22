@@ -586,14 +586,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   syncCache: async () => {
     try {
-      set({ isLoading: true, error: null });
+      set({ isLoading: true, error: null, successMessage: null });
 
       await sendMessage({
         type: 'SYNC_CACHE'
       });
 
       set({
-        successMessage: 'Cache synced successfully!',
+        successMessage: '同步成功，新标签页云端网址已恢复到首页',
         isLoading: false
       });
 
@@ -605,6 +605,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         error: error instanceof Error ? error.message : 'Failed to sync cache',
         isLoading: false
       });
+      throw error;
     }
   }
 }));

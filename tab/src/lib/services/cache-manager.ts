@@ -3,6 +3,7 @@ import { bookmarkAPI } from './bookmark-api';
 import { tagRecommender } from './tag-recommender';
 import type { SyncResult } from '@/types';
 import { PAGINATION } from '@/lib/constants/urls';
+import { restoreNewtabFromCloud } from '@/newtab/services/cloud-sync';
 
 export class CacheManager {
   /**
@@ -12,6 +13,9 @@ export class CacheManager {
     const startTime = Date.now();
 
     try {
+      // 先恢复新标签页明细；只有恢复成功才报告整体同步成功。
+      await restoreNewtabFromCloud();
+
       // 1. Fetch and cache tags
       const tags = await bookmarkAPI.getTags();
       await db.tags.clear();

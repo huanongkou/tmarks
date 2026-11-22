@@ -11,7 +11,8 @@
     "build:chrome": "node scripts/build-multi-browser.mjs chrome",
     "build:firefox": "node scripts/build-multi-browser.mjs firefox",
     "preview": "vite preview",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "test:sync": "node --test tests/newtab-sync.test.mjs"
   },
   "keywords": [],
   "author": "TMarks Team",

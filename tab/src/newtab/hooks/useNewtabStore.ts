@@ -6,7 +6,7 @@ import { create } from 'zustand';
 import type { Shortcut, ShortcutGroup, ShortcutFolder, NewTabSettings, NewTabStorage, GridItem, GridItemType, GridItemSize } from '../types';
 import { DEFAULT_SETTINGS, STORAGE_KEY, DEFAULT_GROUPS } from '../constants';
 import { StorageService } from '@/lib/utils/storage';
-import { getTMarksUrls } from '@/lib/constants/urls';
+import { normalizeApiUrl } from '@/lib/constants/urls';
 import { getWidgetMeta, getDefaultWidgetConfig } from '../components/widgets/widgetRegistry';
 
 // 同步 NewTab 数据到后端（静默执行，不阻塞 UI）
@@ -26,9 +26,13 @@ async function syncNewtabToBackend(data: {
       return;
     }
 
-    const baseUrl = configuredUrl?.endsWith('/api')
-      ? configuredUrl
-      : getTMarksUrls(configuredUrl || undefined).API_BASE;
+    const baseUrl = normalizeApiUrl(configuredUrl || '');
+
+    const probe = await fetch(`${baseUrl}/tab/newtab/sync`, {
+      headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30000),
+    });
+    const cloud = await probe.json();
+    if (!probe.ok || cloud.data?.recovery_version !== 1) return;
 
     const response = await fetch(`${baseUrl}/tab/newtab/sync`, {
       method: 'POST',
@@ -42,44 +46,7 @@ async function syncNewtabToBackend(data: {
           title: s.title,
           url: s.url,
           favicon: s.favicon,
-          group_id: s.groupId,
-          folder_id: s.folderId,
           position: s.position,
-        })),
-        groups: data.groups.map((g) => ({
-          id: g.id,
-          name: g.name,
-          icon: g.icon,
-          position: g.position,
-        })),
-        folders: data.folders.map((f) => ({
-          id: f.id,
-          name: f.name,
-          icon: f.icon,
-          group_id: f.groupId,
-          position: f.position,
-        })),
-        settings: {
-          columns: data.settings.shortcutColumns,
-          style: data.settings.shortcutStyle,
-          showTitle: true,
-          backgroundType: data.settings.wallpaper.type,
-          backgroundValue: data.settings.wallpaper.value,
-          backgroundBlur: data.settings.wallpaper.blur,
-          backgroundDim: data.settings.wallpaper.brightness,
-          showSearch: data.settings.showSearch,
-          showClock: data.settings.showClock,
-          showPinnedBookmarks: data.settings.showPinnedBookmarks,
-          searchEngine: data.settings.searchEngine,
-        },
-        gridItems: data.gridItems.map((item) => ({
-          id: item.id,
-          type: item.type,
-          size: item.size,
-          position: item.position,
-          group_id: item.groupId,
-          shortcut: item.shortcut,
-          config: item.config,
         })),
       }),
     });

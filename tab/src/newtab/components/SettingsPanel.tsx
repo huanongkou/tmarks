@@ -10,6 +10,7 @@ import { SEARCH_ENGINES } from '../constants';
 import { StorageService } from '@/lib/utils/storage';
 import { getTMarksUrls } from '@/lib/constants/urls';
 import { Z_INDEX } from '../constants/z-index';
+import { restoreNewtabFromCloud } from '../services/cloud-sync';
 import type { ClockFormat, SearchEngine, WallpaperType } from '../types';
 
 interface SettingsPanelProps {
@@ -28,6 +29,22 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const { settings, updateSettings } = useNewtabStore();
   const [tmarksUrl, setTmarksUrl] = useState('');
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState('');
+
+  const handleRestore = async () => {
+    setIsRestoring(true);
+    setRestoreMessage('');
+    try {
+      const count = await restoreNewtabFromCloud();
+      await useNewtabStore.getState().loadData();
+      setRestoreMessage(`已读取 ${count} 个云端网址，恢复到首页`);
+    } catch (error) {
+      setRestoreMessage(error instanceof Error ? error.message : '恢复失败，请重试');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
   // 加载 TMarks 网站 URL
   useEffect(() => {
@@ -263,6 +280,16 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           {activeTab === 'sync' && (
             <div className="space-y-6">
               <SettingSection title="TMarks 同步">
+                <button
+                  onClick={handleRestore}
+                  disabled={isRestoring}
+                  className="w-full p-3 rounded-lg bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
+                >
+                  {isRestoring ? '正在恢复…' : '从云端恢复新标签页网址'}
+                </button>
+                <p className="text-xs text-white/60 mt-2" role="status">
+                  {restoreMessage || '将云端网址合并到默认首页分组，保留本地网址。'}
+                </p>
                 <ToggleItem
                   label="显示置顶书签"
                   checked={settings.showPinnedBookmarks}

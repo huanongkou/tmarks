@@ -19,7 +19,7 @@ import { AddShortcutModal } from './components/AddShortcutModal';
 import { AddFolderModal } from './components/AddFolderModal';
 import { BatchEditModal } from './components/BatchEditModal';
 import { ShortcutContextMenu } from './components/ShortcutContextMenu';
-import { FAVICON_API } from './constants';
+import { FAVICON_API, STORAGE_KEY } from './constants';
 
 export function NewTab() {
   const { settings, isLoading, loadData, updateSettings, shortcutGroups, activeGroupId, setActiveGroup, addShortcut, addFolder } = useNewtabStore();
@@ -37,6 +37,11 @@ export function NewTab() {
 
   useEffect(() => {
     loadData();
+    const handleStorageChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && changes[STORAGE_KEY]) void loadData();
+    };
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
   }, [loadData]);
 
   // 滚轮切换分组 - 使用稳定的回调，通过 ref 访问最新状态
