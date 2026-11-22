@@ -1,6 +1,4 @@
-import { StorageService } from '@/lib/utils/storage';
-import { normalizeApiUrl } from '@/lib/constants/urls';
-import { DEFAULT_GROUPS, DEFAULT_SETTINGS, STORAGE_KEY } from '../constants';
+import { DEFAULT_GROUPS, DEFAULT_SETTINGS } from '../constants';
 import type { NewTabStorage, Shortcut } from '../types';
 
 interface CloudDetail {
@@ -38,19 +36,10 @@ export function mergeCloudDetails(local: NewTabStorage | undefined, details: Clo
 }
 
 export async function restoreNewtabFromCloud(): Promise<number> {
-  const config = await StorageService.getTMarksConfig();
-  if (!config.bookmarkApiKey) throw new Error('请先配置 TMarks API Key');
-  const response = await fetch(`${normalizeApiUrl(config.bookmarkApiUrl)}/tab/newtab/sync`, {
-    headers: { 'X-API-Key': config.bookmarkApiKey }, signal: AbortSignal.timeout(30000),
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || `新标签页恢复失败 (${response.status})`);
-  if (!Array.isArray(payload.data?.shortcuts) || payload.data.recovery_version !== 1) {
-    throw new Error('服务端尚未更新，请等待 Cloudflare 部署完成后重试');
-  }
-  // 请求完成后再读取本地，合并请求期间新增的快捷方式。
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const data = mergeCloudDetails(stored[STORAGE_KEY] as NewTabStorage | undefined, payload.data.shortcuts);
-  await chrome.storage.local.set({ [STORAGE_KEY]: data });
-  return payload.data.shortcuts.length;
+  const { runNewtabSync, SYNC_KEY } = await import('./sync-engine');
+  await runNewtabSync();
+  const stored = await chrome.storage.local.get(['newtab', SYNC_KEY]);
+  const status = stored[SYNC_KEY] as import('./sync-engine').SyncJournal | undefined;
+  if (status?.phase !== 'synced') throw new Error(status?.message || (status?.conflicts?.length ? '存在同步冲突，请在新标签页的同步设置中选择版本' : '还有待上传修改，请在同步设置中查看'));
+  return (stored.newtab as NewTabStorage | undefined)?.shortcuts?.length || 0;
 }

@@ -5,13 +5,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Edit2, Trash2 } from 'lucide-react';
+import { Edit2, Trash2, FolderOutput } from 'lucide-react';
 import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors,
+  useDndMonitor,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
@@ -24,22 +20,26 @@ import { CSS } from '@dnd-kit/utilities';
 import type { ShortcutFolder, Shortcut } from '../types';
 import { Z_INDEX } from '../constants/z-index';
 import { useNewtabStore } from '../hooks/useNewtabStore';
+import { ShortcutIcon } from './ShortcutIcon';
 
 interface FolderModalProps {
   folder: ShortcutFolder;
   shortcuts: Shortcut[];
   onClose: () => void;
   onDeleteFolder: () => void;
+  onShortcutContextMenu: (event: React.MouseEvent, shortcut: Shortcut) => void;
 }
 
 // 可排序的文件夹内项目
 function SortableFolderItem({ 
   shortcut, 
   onRemove,
+  onContextMenu,
   onClick,
 }: { 
   shortcut: Shortcut; 
   onRemove: (id: string) => void;
+  onContextMenu: (event: React.MouseEvent, shortcut: Shortcut) => void;
   onClick: (shortcut: Shortcut) => void;
 }) {
   const iconRef = useRef<HTMLDivElement>(null);
@@ -50,7 +50,7 @@ function SortableFolderItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: shortcut.id });
+  } = useSortable({ id: shortcut.id, data: { type: 'shortcut', folderId: shortcut.folderId } });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -82,8 +82,10 @@ function SortableFolderItem({
       style={style}
       {...attributes}
       {...listeners}
-      className="group relative flex flex-col items-center gap-1.5 p-2 rounded-xl cursor-pointer transition-colors hover:bg-white/5"
+      title={[shortcut.title, shortcut.note].filter(Boolean).join('\n\n')}
+      className="group relative flex flex-col items-center gap-3 px-2 py-3 min-h-[156px] min-w-0 rounded-2xl cursor-pointer transition-colors hover:bg-white/5"
       onClick={() => !isDragging && onClick(shortcut)}
+      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); onContextMenu(event, shortcut); }}
     >
       <div className="relative w-16 h-16">
         <div 
@@ -91,36 +93,26 @@ function SortableFolderItem({
           className="w-full h-full rounded-xl liquid-glass-icon flex items-center justify-center overflow-hidden"
         >
           <div className="glass-refraction" />
-          {shortcut.favicon ? (
-            <img
-              src={shortcut.favicon}
-              alt={shortcut.title}
-              className="w-4/5 h-4/5 object-contain rounded-lg relative z-10"
-              draggable={false}
-            />
-          ) : (
-            <div className="w-4/5 h-4/5 flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg relative z-10">
-              <span className="text-xl font-bold text-white">
-                {shortcut.title.charAt(0).toUpperCase()}
-              </span>
-            </div>
-          )}
+          <ShortcutIcon shortcut={shortcut} className="relative z-10 h-4/5 w-4/5" />
         </div>
         
         {/* 移出按钮 */}
         <button
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onRemove(shortcut.id);
           }}
-          className="absolute -top-2 -right-2 p-1.5 rounded-full bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-400 z-20"
-          title="移出文件夹"
+          className="absolute -top-2 -right-2 rounded-full border border-white/20 bg-slate-800 p-1.5 text-white/80 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-700 z-20"
+          title="移出文件夹（保留快捷方式）"
+          aria-label={`将 ${shortcut.title} 移出文件夹`}
         >
-          <Trash2 className="w-3 h-3" />
+          <FolderOutput className="w-3.5 h-3.5" />
         </button>
       </div>
       
-      <span className="text-xs text-white/90 truncate w-full text-center select-none">
+      <span className="line-clamp-3 min-h-[60px] w-full break-words text-center text-sm leading-5 text-white/90 select-none [overflow-wrap:anywhere]">
         {shortcut.title}
       </span>
     </div>
@@ -132,8 +124,9 @@ export function FolderModal({
   shortcuts,
   onClose,
   onDeleteFolder,
+  onShortcutContextMenu,
 }: FolderModalProps) {
-  const { incrementClickCount, updateShortcut, updateFolder } = useNewtabStore();
+  const { incrementClickCount, updateShortcut, updateFolder, settings } = useNewtabStore();
   const [isVisible, setIsVisible] = useState(false);
   const [localShortcuts, setLocalShortcuts] = useState(shortcuts);
   const [title, setTitle] = useState(folder.name);
@@ -163,11 +156,6 @@ export function FolderModal({
     }
   }, [isEditingTitle]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    })
-  );
 
   const handleShortcutClick = (shortcut: Shortcut) => {
     incrementClickCount(shortcut.id);
@@ -180,7 +168,7 @@ export function FolderModal({
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (!over || over.data.current?.type === 'group' || active.id === over.id) return;
 
     const oldIndex = localShortcuts.findIndex(s => s.id === active.id);
     const newIndex = localShortcuts.findIndex(s => s.id === over.id);
@@ -194,6 +182,8 @@ export function FolderModal({
       });
     }
   };
+
+  useDndMonitor({ onDragEnd: handleDragEnd });
 
   const handleTitleSave = () => {
     setIsEditingTitle(false);
@@ -212,14 +202,14 @@ export function FolderModal({
 
   return createPortal(
     <div
-      className={`fixed inset-0 flex items-center justify-center p-4 transition-all duration-300 ${
+      className={`fixed inset-y-0 right-0 ${settings.sidebarPinned ? "left-[88px] sm:left-[208px] xl:left-[232px]" : "left-0"} flex items-center justify-center p-4 transition-all duration-300 ${
         isVisible ? 'bg-black/70 backdrop-blur-md opacity-100' : 'opacity-0'
       }`}
       style={{ zIndex: Z_INDEX.MODAL_BACKDROP }}
       onClick={handleClose}
     >
       <div
-        className={`liquid-glass rounded-3xl w-full max-w-2xl p-6 shadow-2xl transition-all duration-300 ease-[cubic-bezier(0.33,1,0.68,1)] ${
+        className={`liquid-glass rounded-3xl w-full max-w-3xl max-h-[85vh] overflow-y-auto p-4 sm:p-6 shadow-2xl transition-all duration-300 ease-[cubic-bezier(0.33,1,0.68,1)] ${
           isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         }`}
         style={{ zIndex: Z_INDEX.MODAL_CONTENT }}
@@ -265,16 +255,11 @@ export function FolderModal({
         </div>
 
         {/* 快捷方式网格 */}
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
           <SortableContext
             items={localShortcuts.map(s => s.id)}
             strategy={rectSortingStrategy}
           >
-            <div className="grid grid-cols-4 sm:grid-cols-5 gap-4 min-h-[120px]">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(112px,1fr))] gap-x-6 gap-y-7 min-h-[156px]">
               {localShortcuts.length === 0 ? (
                 <div className="col-span-full text-center py-12 text-white/50 text-sm">
                   文件夹为空
@@ -285,13 +270,13 @@ export function FolderModal({
                     key={shortcut.id}
                     shortcut={shortcut}
                     onRemove={handleRemoveFromFolder}
+                    onContextMenu={onShortcutContextMenu}
                     onClick={handleShortcutClick}
                   />
                 ))
               )}
             </div>
           </SortableContext>
-        </DndContext>
       </div>
     </div>,
     document.body

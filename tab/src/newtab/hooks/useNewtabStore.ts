@@ -3,81 +3,19 @@
  */
 
 import { create } from 'zustand';
+import { getGroupItems, nextGroupPosition } from '../utils/shortcut-layout';
 import type { Shortcut, ShortcutGroup, ShortcutFolder, NewTabSettings, NewTabStorage, GridItem, GridItemType, GridItemSize } from '../types';
 import { DEFAULT_SETTINGS, STORAGE_KEY, DEFAULT_GROUPS } from '../constants';
-import { StorageService } from '@/lib/utils/storage';
-import { normalizeApiUrl } from '@/lib/constants/urls';
+import { saveLocalPatch } from '../services/sync-engine';
+import { emptyLocal, newJournal, SYNC_KEY, type SyncSnapshot, type SyncJournal } from '../services/sync-journal';
 import { getWidgetMeta, getDefaultWidgetConfig } from '../components/widgets/widgetRegistry';
 
-// 同步 NewTab 数据到后端（静默执行，不阻塞 UI）
-async function syncNewtabToBackend(data: {
-  shortcuts: Shortcut[];
-  groups: ShortcutGroup[];
-  folders: ShortcutFolder[];
-  settings: NewTabSettings;
-  gridItems: GridItem[];
-}) {
-  try {
-    const configuredUrl = await StorageService.getBookmarkSiteApiUrl();
-    const apiKey = await StorageService.getBookmarkSiteApiKey();
-
-    if (!apiKey) {
-      console.log('[NewTab Sync] 未配置 API Key，跳过同步');
-      return;
-    }
-
-    const baseUrl = normalizeApiUrl(configuredUrl || '');
-
-    const probe = await fetch(`${baseUrl}/tab/newtab/sync`, {
-      headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(30000),
-    });
-    const cloud = await probe.json();
-    if (!probe.ok || cloud.data?.recovery_version !== 1) return;
-
-    const response = await fetch(`${baseUrl}/tab/newtab/sync`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-      },
-      body: JSON.stringify({
-        shortcuts: data.shortcuts.map((s) => ({
-          id: s.id,
-          title: s.title,
-          url: s.url,
-          favicon: s.favicon,
-          position: s.position,
-        })),
-      }),
-    });
-
-    if (response.ok) {
-      console.log('[NewTab Sync] 数据已同步到后端');
-    } else {
-      console.warn('[NewTab Sync] 同步失败:', response.status);
-    }
-  } catch (error) {
-    // 静默失败，不影响本地操作
-    console.warn('[NewTab Sync] 同步失败:', error);
-  }
-}
-
-// 防抖同步（避免频繁请求）
-let syncTimeout: ReturnType<typeof setTimeout> | null = null;
-function debouncedSync(data: {
-  shortcuts: Shortcut[];
-  groups: ShortcutGroup[];
-  folders: ShortcutFolder[];
-  settings: NewTabSettings;
-  gridItems: GridItem[];
-}) {
-  if (syncTimeout) {
-    clearTimeout(syncTimeout);
-  }
-  syncTimeout = setTimeout(() => {
-    syncNewtabToBackend(data);
-  }, 2000); // 2秒防抖
-}
+let previousView = emptyLocal();
+let previousRemote: SyncSnapshot = newJournal().remote;
+let previousScope: string | undefined;
+let writeRevision = 0;
+let loadRevision = 0;
+let pendingWrites: Promise<unknown> = Promise.resolve();
 
 interface NewTabState {
   // 数据
@@ -88,32 +26,38 @@ interface NewTabState {
   settings: NewTabSettings;
   isLoading: boolean;
   gridItems: GridItem[];
-  
+
+  // 仅用于拖拽交互，不持久化
+  draggingShortcutId: string | null;
+
   // Actions
   loadData: () => Promise<void>;
   saveData: () => Promise<void>;
-  
+
   // 快捷方式操作
   addShortcut: (shortcut: Omit<Shortcut, 'id' | 'position' | 'createdAt' | 'clickCount'>) => void;
   updateShortcut: (id: string, updates: Partial<Shortcut>) => void;
   removeShortcut: (id: string) => void;
+  moveShortcutToGroup: (shortcutId: string, groupId: string) => void;
   reorderShortcuts: (fromIndex: number, toIndex: number) => void;
+  reorderGroupItems: (activeId: string, targetId: string) => void;
   incrementClickCount: (id: string) => void;
-  
+
   // 分组操作
   setActiveGroup: (groupId: string | null) => void;
   addGroup: (name: string, icon: string) => void;
   updateGroup: (id: string, updates: Partial<ShortcutGroup>) => void;
+  reorderGroups: (activeId: string, targetId: string) => void;
   removeGroup: (id: string) => void;
   getFilteredShortcuts: () => Shortcut[];
-  
+
   // 文件夹操作
   addFolder: (name: string, groupId?: string) => string;
   updateFolder: (id: string, updates: Partial<ShortcutFolder>) => void;
   removeFolder: (id: string) => void;
   getFolderShortcuts: (folderId: string) => Shortcut[];
   moveShortcutToFolder: (shortcutId: string, folderId: string | undefined) => void;
-  
+
   // 设置操作
   updateSettings: (updates: Partial<NewTabSettings>) => void;
 
@@ -137,24 +81,33 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoading: true,
   gridItems: [],
-  
+  draggingShortcutId: null,
+
   loadData: async () => {
     try {
-      const result = await chrome.storage.local.get(STORAGE_KEY);
+      const loadRequest = ++loadRevision;
+      await pendingWrites;
+      const readRevision = writeRevision;
+      const result = await chrome.storage.local.get([STORAGE_KEY, SYNC_KEY]);
+      if (loadRequest !== loadRevision) return;
+      if (readRevision !== writeRevision) return get().loadData();
       const data = result[STORAGE_KEY] as NewTabStorage | undefined;
-      
+
       // 确保分组数据有效
       const groups = data?.shortcutGroups?.length ? data.shortcutGroups : DEFAULT_GROUPS;
-      
+
       // 验证 activeGroupId 是否有效，如果无效则使用第一个分组
       let activeGroupId = data?.activeGroupId;
       if (!activeGroupId || !groups.some(g => g.id === activeGroupId)) {
         activeGroupId = groups[0]?.id || 'home';
       }
-      
+
       // 合并设置，确保新增的设置项有默认值
       const settings = { ...DEFAULT_SETTINGS, ...(data?.settings || {}) };
-      
+
+      previousScope = (result[SYNC_KEY] as SyncJournal | undefined)?.scope;
+      previousRemote = (result[SYNC_KEY] as SyncJournal | undefined)?.remote || newJournal().remote;
+      previousView = structuredClone({ ...emptyLocal(), ...data, shortcutGroups: groups, settings });
       set({
         shortcuts: data?.shortcuts || [],
         shortcutGroups: groups,
@@ -164,7 +117,7 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
         gridItems: data?.gridItems || [],
         isLoading: false,
       });
-      
+
       // 如果是首次加载（没有数据），保存默认数据
       if (!data) {
         const { saveData } = get();
@@ -175,24 +128,31 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
       set({ isLoading: false });
     }
   },
-  
+
   saveData: async () => {
     const { shortcuts, shortcutGroups, shortcutFolders, activeGroupId, settings, gridItems } = get();
     const data: NewTabStorage = { shortcuts, shortcutGroups, shortcutFolders, activeGroupId, settings, gridItems };
-    
+
     try {
-      await chrome.storage.local.set({ [STORAGE_KEY]: data });
+      writeRevision++;
+      const before = previousView;
+      const viewRemote = previousRemote;
+      const viewScope = previousScope;
+      previousView = structuredClone(data);
+      pendingWrites = pendingWrites.catch(() => {}).then(() => saveLocalPatch(before, data, viewRemote, viewScope));
+      await pendingWrites;
     } catch (error) {
       console.error('Failed to save newtab data:', error);
+      void get().loadData();
     }
   },
-  
+
   addShortcut: (shortcut) => {
-    const { shortcuts, shortcutGroups, settings, gridItems, saveData } = get();
+    const { shortcuts, saveData } = get();
     const newShortcut: Shortcut = {
       ...shortcut,
       id: generateId(),
-      position: shortcuts.length,
+      position: nextGroupPosition(shortcuts, get().shortcutFolders, shortcut.groupId || 'home'),
       createdAt: Date.now(),
       clickCount: 0,
     };
@@ -206,7 +166,7 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
       try {
         const { downloadFavicon } = await import('../utils/favicon');
         const base64 = await downloadFavicon(newShortcut.url);
-        if (base64) {
+        if (base64 && get().shortcuts.some((item) => item.id === newShortcut.id && item.url === newShortcut.url)) {
           const { updateShortcut } = get();
           updateShortcut(newShortcut.id, { faviconBase64: base64 });
         }
@@ -216,38 +176,58 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     })();
 
     // 异步同步到后端（防抖）
-    const { shortcutFolders } = get();
-    debouncedSync({ shortcuts: newShortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems });
+
   },
-  
+
   updateShortcut: (id, updates) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcuts, saveData } = get();
     const newShortcuts = shortcuts.map((s) => (s.id === id ? { ...s, ...updates } : s));
     set({ shortcuts: newShortcuts });
     saveData();
-    debouncedSync({ shortcuts: newShortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems });
+  },
+
+  moveShortcutToGroup: (shortcutId, groupId) => {
+    const { shortcuts, shortcutGroups, updateShortcut } = get();
+    const shortcut = shortcuts.find((item) => item.id === shortcutId);
+    if (!shortcut || !shortcutGroups.some((group) => group.id === groupId)) return;
+    if ((shortcut.groupId || 'home') === groupId && !shortcut.folderId) return;
+    const position = nextGroupPosition(shortcuts, get().shortcutFolders, groupId);
+    updateShortcut(shortcutId, { groupId, folderId: undefined, position });
   },
 
   removeShortcut: (id) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcuts, saveData } = get();
     const filtered = shortcuts.filter((s) => s.id !== id);
-    const reordered = filtered.map((s, index) => ({ ...s, position: index }));
+    const reordered = filtered;
     set({ shortcuts: reordered });
     saveData();
-    debouncedSync({ shortcuts: reordered, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems });
+  },
+
+  reorderGroupItems: (activeId, targetId) => {
+    const { shortcuts, shortcutFolders, activeGroupId, saveData } = get();
+    const items = getGroupItems(shortcuts, shortcutFolders, activeGroupId || 'home');
+    const from = items.findIndex((item) => item.id === activeId);
+    const to = items.findIndex((item) => item.id === targetId);
+    if (from < 0 || to < 0 || from === to) return;
+    const [moved] = items.splice(from, 1);
+    items.splice(to, 0, moved);
+    const positions = new Map(items.map((item, position) => [item.id, position]));
+    const nextShortcuts = shortcuts.map((item) => positions.has(item.id) ? { ...item, position: positions.get(item.id)! } : item);
+    const nextFolders = shortcutFolders.map((item) => positions.has(item.id) ? { ...item, position: positions.get(item.id)! } : item);
+    set({ shortcuts: nextShortcuts, shortcutFolders: nextFolders });
+    void saveData();
   },
 
   reorderShortcuts: (fromIndex, toIndex) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcuts, saveData } = get();
     const newShortcuts = [...shortcuts];
     const [removed] = newShortcuts.splice(fromIndex, 1);
     newShortcuts.splice(toIndex, 0, removed);
     const reordered = newShortcuts.map((s, index) => ({ ...s, position: index }));
     set({ shortcuts: reordered });
     saveData();
-    debouncedSync({ shortcuts: reordered, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems });
   },
-  
+
   incrementClickCount: (id) => {
     const { shortcuts, saveData } = get();
     set({
@@ -257,13 +237,12 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     });
     saveData();
   },
-  
+
   updateSettings: (updates) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { settings, saveData } = get();
     const newSettings = { ...settings, ...updates };
     set({ settings: newSettings });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: shortcutFolders, settings: newSettings, gridItems });
   },
 
   // 分组操作
@@ -275,7 +254,7 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
   },
 
   addGroup: (name, icon) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcutGroups, saveData } = get();
     const newGroup: ShortcutGroup = {
       id: generateId(),
       name,
@@ -285,19 +264,29 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     const newGroups = [...shortcutGroups, newGroup];
     set({ shortcutGroups: newGroups });
     saveData();
-    debouncedSync({ shortcuts, groups: newGroups, folders: shortcutFolders, settings, gridItems });
   },
 
   updateGroup: (id, updates) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcutGroups, saveData } = get();
     const newGroups = shortcutGroups.map((g) => (g.id === id ? { ...g, ...updates } : g));
     set({ shortcutGroups: newGroups });
     saveData();
-    debouncedSync({ shortcuts, groups: newGroups, folders: shortcutFolders, settings, gridItems });
+  },
+
+  reorderGroups: (activeId, targetId) => {
+    const { shortcutGroups, saveData } = get();
+    const from = shortcutGroups.findIndex((group) => group.id === activeId);
+    const to = shortcutGroups.findIndex((group) => group.id === targetId);
+    if (from < 0 || to < 0 || from === to) return;
+    const groups = [...shortcutGroups];
+    const [moved] = groups.splice(from, 1);
+    groups.splice(to, 0, moved);
+    set({ shortcutGroups: groups.map((group, position) => ({ ...group, position })) });
+    void saveData();
   },
 
   removeGroup: (id) => {
-    const { shortcutGroups, shortcutFolders, shortcuts, activeGroupId, settings, gridItems, saveData } = get();
+    const { shortcutGroups, shortcutFolders, shortcuts, activeGroupId, saveData } = get();
     // 不允许删除首页分组
     if (id === 'home') {
       console.warn('不能删除首页分组');
@@ -311,78 +300,79 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     set({
       shortcutGroups: filtered,
       shortcuts: updatedShortcuts,
+      shortcutFolders: shortcutFolders.map(folder => folder.groupId === id ? { ...folder, groupId: 'home' } : folder),
       activeGroupId: activeGroupId === id ? 'home' : activeGroupId,
     });
     saveData();
-    debouncedSync({ shortcuts: updatedShortcuts, groups: filtered, folders: shortcutFolders, settings, gridItems });
   },
-  
+
   getFilteredShortcuts: () => {
     const { shortcuts, activeGroupId } = get();
     // 如果没有选中分组，默认显示首页分组
     const targetGroupId = activeGroupId ?? 'home';
     // 只返回不在文件夹内的快捷方式
-    return shortcuts.filter((s) => s.groupId === targetGroupId && !s.folderId);
+    return shortcuts.filter((s) => (s.groupId || 'home') === targetGroupId && !s.folderId).sort((a, b) => a.position - b.position);
   },
 
   // 文件夹操作
   addFolder: (name, groupId) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, activeGroupId, settings, gridItems, saveData } = get();
+    const { shortcuts, shortcutFolders, activeGroupId, saveData } = get();
     const newFolder: ShortcutFolder = {
       id: generateId(),
       name,
-      position: shortcutFolders.length,
+      position: nextGroupPosition(shortcuts, shortcutFolders, groupId ?? activeGroupId ?? 'home'),
       groupId: groupId ?? activeGroupId ?? undefined,
       createdAt: Date.now(),
     };
     const newFolders = [...shortcutFolders, newFolder];
     set({ shortcutFolders: newFolders });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: newFolders, settings, gridItems });
     return newFolder.id;
   },
 
   updateFolder: (id, updates) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcutFolders, saveData } = get();
     const newFolders = shortcutFolders.map((f) => (f.id === id ? { ...f, ...updates } : f));
     set({ shortcutFolders: newFolders });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: newFolders, settings, gridItems });
   },
 
   removeFolder: (id) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { shortcuts, shortcutFolders, saveData } = get();
     // 删除文件夹时，将文件夹内的快捷方式移出
+    const folder = shortcutFolders.find((item) => item.id === id);
+    let position = nextGroupPosition(shortcuts, shortcutFolders, folder?.groupId || 'home');
     const updatedShortcuts = shortcuts.map((s) =>
-      s.folderId === id ? { ...s, folderId: undefined } : s
+      s.folderId === id ? { ...s, folderId: undefined, groupId: folder?.groupId || 'home', position: position++ } : s
     );
     const filtered = shortcutFolders.filter((f) => f.id !== id);
     set({ shortcutFolders: filtered, shortcuts: updatedShortcuts });
     saveData();
-    debouncedSync({ shortcuts: updatedShortcuts, groups: shortcutGroups, folders: filtered, settings, gridItems });
   },
 
   getFolderShortcuts: (folderId) => {
     const { shortcuts } = get();
-    return shortcuts.filter((s) => s.folderId === folderId);
+    return shortcuts.filter((s) => s.folderId === folderId).sort((a, b) => a.position - b.position);
   },
 
   moveShortcutToFolder: (shortcutId, folderId) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
-    const newShortcuts = shortcuts.map((s) =>
-      s.id === shortcutId ? { ...s, folderId } : s
-    );
-    set({ shortcuts: newShortcuts });
-    saveData();
-    debouncedSync({ shortcuts: newShortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems });
+    const { shortcuts, shortcutFolders, updateShortcut } = get();
+    const shortcut = shortcuts.find((item) => item.id === shortcutId);
+    if (!shortcut || shortcut.folderId === folderId) return;
+    const folder = folderId ? shortcutFolders.find((item) => item.id === folderId) : undefined;
+    if (folderId && !folder) return;
+    const position = folderId
+      ? Math.max(-1, ...shortcuts.filter((item) => item.id !== shortcutId && item.folderId === folderId).map((item) => item.position)) + 1
+      : nextGroupPosition(shortcuts, shortcutFolders, shortcut.groupId || 'home');
+    updateShortcut(shortcutId, { folderId, groupId: folder ? folder.groupId || 'home' : shortcut.groupId, position });
   },
 
   // 网格项操作
   addGridItem: (type, options = {}) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, activeGroupId, saveData } = get();
+    const { gridItems, activeGroupId, saveData } = get();
     const meta = getWidgetMeta(type);
     const defaultConfig = getDefaultWidgetConfig(type);
-    
+
     const newItem: GridItem = {
       id: generateId(),
       type,
@@ -397,7 +387,6 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     const newGridItems = [...gridItems, newItem];
     set({ gridItems: newGridItems });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems: newGridItems });
 
     // 如果是快捷方式类型，异步下载并缓存 favicon
     if (type === 'shortcut' && options.shortcut?.url) {
@@ -422,33 +411,30 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
   },
 
   updateGridItem: (id, updates) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { gridItems, saveData } = get();
     const newGridItems = gridItems.map((item) =>
       item.id === id ? { ...item, ...updates } : item
     );
     set({ gridItems: newGridItems });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems: newGridItems });
   },
 
   removeGridItem: (id) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { gridItems, saveData } = get();
     const filtered = gridItems.filter((item) => item.id !== id);
     const reordered = filtered.map((item, index) => ({ ...item, position: index }));
     set({ gridItems: reordered });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems: reordered });
   },
 
   reorderGridItems: (fromIndex, toIndex) => {
-    const { shortcuts, shortcutGroups, shortcutFolders, settings, gridItems, saveData } = get();
+    const { gridItems, saveData } = get();
     const newGridItems = [...gridItems];
     const [removed] = newGridItems.splice(fromIndex, 1);
     newGridItems.splice(toIndex, 0, removed);
     const reordered = newGridItems.map((item, index) => ({ ...item, position: index }));
     set({ gridItems: reordered });
     saveData();
-    debouncedSync({ shortcuts, groups: shortcutGroups, folders: shortcutFolders, settings, gridItems: reordered });
   },
 
   getFilteredGridItems: () => {
@@ -461,7 +447,7 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
   // 数据迁移：将旧的 shortcuts 迁移到 gridItems
   migrateToGridItems: () => {
     const { shortcuts, gridItems, saveData } = get();
-    
+
     // 如果没有 shortcuts，不需要迁移
     if (shortcuts.length === 0) return;
 
@@ -473,7 +459,7 @@ export const useNewtabStore = create<NewTabState>((set, get) => ({
     );
 
     const newShortcuts = shortcuts.filter(s => !existingShortcutIds.has(s.id));
-    
+
     if (newShortcuts.length === 0) return;
 
     // 迁移新的快捷方式

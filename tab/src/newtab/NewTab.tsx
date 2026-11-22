@@ -5,14 +5,8 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { Plus, Edit, FolderPlus } from 'lucide-react';
 import { useNewtabStore } from './hooks/useNewtabStore';
-import { Clock } from './components/Clock';
-import { SearchBar } from './components/SearchBar';
 import { ShortcutGrid } from './components/ShortcutGrid';
 import { Wallpaper } from './components/Wallpaper';
-import { DockBar } from './components/DockBar';
-import { Greeting } from './components/Greeting';
-import { LunarDate } from './components/LunarDate';
-import { Poetry } from './components/Poetry';
 import { GroupSidebar } from './components/GroupSidebar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AddShortcutModal } from './components/AddShortcutModal';
@@ -20,10 +14,12 @@ import { AddFolderModal } from './components/AddFolderModal';
 import { BatchEditModal } from './components/BatchEditModal';
 import { ShortcutContextMenu } from './components/ShortcutContextMenu';
 import { FAVICON_API, STORAGE_KEY } from './constants';
+import { NewtabDragContext } from './components/NewtabDragContext';
 
 export function NewTab() {
-  const { settings, isLoading, loadData, updateSettings, shortcutGroups, activeGroupId, setActiveGroup, addShortcut, addFolder } = useNewtabStore();
+  const { settings, isLoading, loadData, shortcutGroups, activeGroupId, setActiveGroup, addShortcut, addFolder } = useNewtabStore();
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'general' | 'sync'>('general');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddFolderModal, setShowAddFolderModal] = useState(false);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
@@ -46,6 +42,7 @@ export function NewTab() {
 
   // 滚轮切换分组 - 使用稳定的回调，通过 ref 访问最新状态
   const handleWheel = useCallback((e: WheelEvent) => {
+    if (useNewtabStore.getState().draggingShortcutId) return;
     const { shortcutGroups: groups, activeGroupId: currentGroupId, setActiveGroup: setGroup } = stateRef.current;
     
     // 如果正在锁定中，忽略滚轮事件
@@ -116,15 +113,13 @@ export function NewTab() {
 
   // 监听滚轮事件
   useEffect(() => {
-    if (!settings.showShortcuts) return;
-    
     // 移除 passive: true，允许阻止默认行为
     window.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
       window.removeEventListener('wheel', handleWheel);
       if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current);
     };
-  }, [handleWheel, settings.showShortcuts]);
+  }, [handleWheel]);
 
   // 监听右键菜单事件
   useEffect(() => {
@@ -143,93 +138,42 @@ export function NewTab() {
   }
 
   return (
-    <div className="relative w-full h-full overflow-hidden">
+    <NewtabDragContext>
+    <div className={`relative w-full h-full overflow-hidden [--newtab-sidebar-width:88px] sm:[--newtab-sidebar-width:208px] xl:[--newtab-sidebar-width:232px] ${settings.sidebarPinned ? '[--newtab-sidebar-offset:var(--newtab-sidebar-width)]' : '[--newtab-sidebar-offset:14px]'}`}>
       {/* 壁纸背景 */}
       <Wallpaper config={settings.wallpaper} />
 
 
 
-      {/* 主内容 - 参考 mtab 布局，内容偏上 */}
-      <div className="relative z-10 w-full h-full flex flex-col items-center px-4 pt-[12vh] pb-8 overflow-y-auto">
-        {/* 问候语 */}
-        {settings.showGreeting && (
-          <div className="mb-1 animate-fadeIn">
-            <Greeting userName={settings.userName} />
-          </div>
-        )}
-
-        {/* 时钟（包含日期和农历） */}
-        {settings.showClock && (
-          <div className="mb-3 animate-fadeIn">
-            <Clock
-              format={settings.clockFormat}
-              showDate={settings.showDate}
-              showSeconds={settings.showSeconds}
-              showLunar={settings.showLunar}
-            />
-          </div>
-        )}
-
-        {/* 独立农历显示（仅当时钟关闭但农历开启时） */}
-        {!settings.showClock && settings.showLunar && (
-          <div className="mb-3 animate-fadeIn">
-            <LunarDate />
-          </div>
-        )}
-
-        {/* 每日诗词 */}
-        {settings.showPoetry && (
-          <div className="mb-6 animate-fadeIn">
-            <Poetry />
-          </div>
-        )}
-
-        {/* 搜索框 - 提高层级确保下拉框不被遮挡 */}
-        {settings.showSearch && (
-          <div className="w-full max-w-2xl mb-6 animate-fadeIn px-4 relative z-50">
-            <SearchBar
-              engine={settings.searchEngine}
-              enableSuggestions={settings.enableSearchSuggestions}
-              onEngineChange={(engine) => updateSettings({ searchEngine: engine })}
-            />
-          </div>
-        )}
-
-        {/* 快捷方式网格 + 添加按钮 */}
-        {settings.showShortcuts && (
-          <div className="w-full max-w-5xl animate-fadeIn px-4 shortcut-area">
-            <div className="flex items-start gap-4">
-              <ShortcutGrid 
-                columns={settings.shortcutColumns} 
-                style={settings.shortcutStyle}
-                onAddClick={() => setShowAddModal(true)}
-                onBatchEditClick={() => setShowBatchEdit(true)}
-              />
-            </div>
-          </div>
-        )}
-
-      </div>
+      {/* 新标签页仅展示当前分组的快捷方式。 */}
+      <main className="relative z-10 ml-[var(--newtab-sidebar-offset)] h-full overflow-y-auto px-4 py-8 transition-[margin-left] duration-200 sm:px-6 sm:py-12">
+        <div className="shortcut-area mx-auto w-full max-w-6xl animate-fadeIn">
+          <ShortcutGrid
+            columns={settings.shortcutColumns}
+            style={settings.shortcutStyle}
+            onAddClick={() => setShowAddModal(true)}
+            onBatchEditClick={() => setShowBatchEdit(true)}
+          />
+        </div>
+      </main>
 
       {/* 左侧分组侧边栏 */}
-      <GroupSidebar onOpenSettings={() => setShowSettings(true)} />
-
-      {/* 底部 Dock 栏 - 置顶书签 */}
-      {settings.showPinnedBookmarks && <DockBar />}
+      <GroupSidebar onOpenSettings={() => { setSettingsTab('general'); setShowSettings(true); }} onOpenSync={() => { setSettingsTab('sync'); setShowSettings(true); }} />
 
       {/* 设置面板 - 在顶层渲染避免被父容器限制 */}
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsPanel initialTab={settingsTab} onClose={() => setShowSettings(false)} />}
 
       {/* 添加快捷方式弹窗 */}
       {showAddModal && (
         <AddShortcutModal
           isOpen={showAddModal}
           onClose={() => setShowAddModal(false)}
-          onAdd={(url, title) => {
+          onAdd={(url, title, note) => {
             const domain = new URL(url).hostname;
             addShortcut({
               url,
               title,
+              note,
               favicon: `${FAVICON_API}${domain}&sz=64`,
               groupId: activeGroupId || undefined,
             });
@@ -282,5 +226,6 @@ export function NewTab() {
         />
       )}
     </div>
+    </NewtabDragContext>
   );
 }

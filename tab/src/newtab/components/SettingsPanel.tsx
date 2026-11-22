@@ -6,15 +6,15 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Cloud, User, ExternalLink, Palette } from 'lucide-react';
 import { useNewtabStore } from '../hooks/useNewtabStore';
-import { SEARCH_ENGINES } from '../constants';
 import { StorageService } from '@/lib/utils/storage';
 import { getTMarksUrls } from '@/lib/constants/urls';
 import { Z_INDEX } from '../constants/z-index';
-import { restoreNewtabFromCloud } from '../services/cloud-sync';
-import type { ClockFormat, SearchEngine, WallpaperType } from '../types';
+import { SyncStatus } from './SyncStatus';
+import type { WallpaperType } from '../types';
 
 interface SettingsPanelProps {
   onClose: () => void;
+  initialTab?: SettingsTab;
 }
 
 type SettingsTab = 'general' | 'appearance' | 'sync';
@@ -25,27 +25,10 @@ const TABS = [
   { id: 'sync' as const, label: '同步', icon: Cloud },
 ];
 
-export function SettingsPanel({ onClose }: SettingsPanelProps) {
+export function SettingsPanel({ onClose, initialTab = 'general' }: SettingsPanelProps) {
   const { settings, updateSettings } = useNewtabStore();
   const [tmarksUrl, setTmarksUrl] = useState('');
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [restoreMessage, setRestoreMessage] = useState('');
-
-  const handleRestore = async () => {
-    setIsRestoring(true);
-    setRestoreMessage('');
-    try {
-      const count = await restoreNewtabFromCloud();
-      await useNewtabStore.getState().loadData();
-      setRestoreMessage(`已读取 ${count} 个云端网址，恢复到首页`);
-    } catch (error) {
-      setRestoreMessage(error instanceof Error ? error.message : '恢复失败，请重试');
-    } finally {
-      setIsRestoring(false);
-    }
-  };
-
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   // 加载 TMarks 网站 URL
   useEffect(() => {
     const loadTMarksUrl = async () => {
@@ -113,80 +96,13 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'general' && (
             <div className="space-y-6">
-              {/* 个性化 */}
-              <SettingSection title="个性化">
+              <SettingSection title="分组侧栏">
                 <ToggleItem
-                  label="显示问候语"
-                  checked={settings.showGreeting}
-                  onChange={(v) => updateSettings({ showGreeting: v })}
+                  label="固定侧栏"
+                  checked={settings.sidebarPinned}
+                  onChange={(v) => updateSettings({ sidebarPinned: v })}
                 />
-                <TextItem
-                  label="你的名字"
-                  value={settings.userName}
-                  placeholder="可选"
-                  onChange={(v) => updateSettings({ userName: v })}
-                />
-              </SettingSection>
-
-              {/* 时钟 */}
-              <SettingSection title="时钟">
-                <ToggleItem
-                  label="显示时钟"
-                  checked={settings.showClock}
-                  onChange={(v) => updateSettings({ showClock: v })}
-                />
-                {settings.showClock && (
-                  <>
-                    <ToggleItem
-                      label="显示日期"
-                      checked={settings.showDate}
-                      onChange={(v) => updateSettings({ showDate: v })}
-                    />
-                    <ToggleItem
-                      label="显示秒数"
-                      checked={settings.showSeconds}
-                      onChange={(v) => updateSettings({ showSeconds: v })}
-                    />
-                    <ToggleItem
-                      label="显示农历"
-                      checked={settings.showLunar}
-                      onChange={(v) => updateSettings({ showLunar: v })}
-                    />
-                    <SelectItem
-                      label="时间格式"
-                      value={settings.clockFormat}
-                      options={[
-                        { value: '24h', label: '24 小时制' },
-                        { value: '12h', label: '12 小时制' },
-                      ]}
-                      onChange={(v) => updateSettings({ clockFormat: v as ClockFormat })}
-                    />
-                  </>
-                )}
-              </SettingSection>
-
-              {/* 诗词 */}
-              <SettingSection title="诗词">
-                <ToggleItem
-                  label="显示每日诗词"
-                  checked={settings.showPoetry}
-                  onChange={(v) => updateSettings({ showPoetry: v })}
-                />
-              </SettingSection>
-
-              {/* 搜索 */}
-              <SettingSection title="搜索">
-                <ToggleItem
-                  label="显示搜索框"
-                  checked={settings.showSearch}
-                  onChange={(v) => updateSettings({ showSearch: v })}
-                />
-                <SelectItem
-                  label="搜索引擎"
-                  value={settings.searchEngine}
-                  options={SEARCH_ENGINES.map((e) => ({ value: e.id, label: e.name }))}
-                  onChange={(v) => updateSettings({ searchEngine: v as SearchEngine })}
-                />
+                <p className="text-xs text-white/45">取消固定后，鼠标靠近左边缘显示侧栏，离开后收起。</p>
               </SettingSection>
 
               {/* 离线缓存 */}
@@ -200,11 +116,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             <div className="space-y-6">
               {/* 快捷方式 */}
               <SettingSection title="快捷方式">
-                <ToggleItem
-                  label="显示快捷方式"
-                  checked={settings.showShortcuts}
-                  onChange={(v) => updateSettings({ showShortcuts: v })}
-                />
                 <SelectItem
                   label="每行数量"
                   value={String(settings.shortcutColumns)}
@@ -280,26 +191,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           {activeTab === 'sync' && (
             <div className="space-y-6">
               <SettingSection title="TMarks 同步">
-                <button
-                  onClick={handleRestore}
-                  disabled={isRestoring}
-                  className="w-full p-3 rounded-lg bg-white/10 hover:bg-white/20 text-white disabled:opacity-50"
-                >
-                  {isRestoring ? '正在恢复…' : '从云端恢复新标签页网址'}
-                </button>
-                <p className="text-xs text-white/60 mt-2" role="status">
-                  {restoreMessage || '将云端网址合并到默认首页分组，保留本地网址。'}
-                </p>
-                <ToggleItem
-                  label="显示置顶书签"
-                  checked={settings.showPinnedBookmarks}
-                  onChange={(v) => updateSettings({ showPinnedBookmarks: v })}
-                />
-                <ToggleItem
-                  label="搜索建议"
-                  checked={settings.enableSearchSuggestions}
-                  onChange={(v) => updateSettings({ enableSearchSuggestions: v })}
-                />
+                <SyncStatus />
                 {tmarksUrl && (
                   <a
                     href={tmarksUrl}
@@ -316,29 +208,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </div>
               </SettingSection>
 
-              <SettingSection title="自动刷新">
-                <ToggleItem
-                  label="定时刷新置顶书签"
-                  checked={settings.autoRefreshPinnedBookmarks}
-                  onChange={(v) => updateSettings({ autoRefreshPinnedBookmarks: v })}
-                />
-                {settings.autoRefreshPinnedBookmarks && (
-                  <>
-                    <SelectItem
-                      label="刷新时间"
-                      value={settings.pinnedBookmarksRefreshTime}
-                      options={[
-                        { value: 'morning', label: '早上 8:00' },
-                        { value: 'evening', label: '晚上 22:00' },
-                      ]}
-                      onChange={(v) => updateSettings({ pinnedBookmarksRefreshTime: v as 'morning' | 'evening' })}
-                    />
-                    <div className="text-xs text-white/40 -mt-1 ml-1">
-                      每天自动更新置顶书签缓存，保持数据最新
-                    </div>
-                  </>
-                )}
-              </SettingSection>
             </div>
           )}
           </div>

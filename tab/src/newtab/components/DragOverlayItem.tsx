@@ -3,7 +3,7 @@
  */
 
 import { Folder } from 'lucide-react';
-import { getFaviconUrl } from '../utils/favicon';
+import { ShortcutIcon } from './ShortcutIcon';
 import type { Shortcut, ShortcutFolder } from '../types';
 
 interface DragOverlayItemProps {
@@ -15,11 +15,11 @@ export function DragOverlayItem({ item, shortcuts = [] }: DragOverlayItemProps) 
   if (item.itemType === 'folder') {
     const folder = item as ShortcutFolder;
     const previewShortcuts = shortcuts.slice(0, 9);
-    const iconSize = 56;
+    const iconSize = 64;
     const padding = iconSize * 0.12;
 
     return (
-      <div className="flex flex-col items-center gap-2 w-16 opacity-90 cursor-grabbing">
+      <div className="flex min-h-[156px] flex-col items-center gap-3 px-2 py-3 opacity-90 cursor-grabbing">
         <div
           className="relative liquid-glass-folder rounded-[18px] overflow-hidden shadow-2xl scale-110"
           style={{
@@ -32,26 +32,8 @@ export function DragOverlayItem({ item, shortcuts = [] }: DragOverlayItemProps) 
           {previewShortcuts.length > 0 ? (
             <div className="w-full h-full grid grid-cols-3 gap-0.5 content-start relative z-10">
               {previewShortcuts.map((shortcut) => {
-                const faviconUrl = getFaviconUrl(shortcut);
                 return (
-                  <div
-                    key={shortcut.id}
-                    className="aspect-square rounded-md overflow-hidden liquid-glass-mini flex items-center justify-center"
-                  >
-                    {faviconUrl ? (
-                      <img
-                        src={faviconUrl}
-                        alt=""
-                        className="w-full h-full object-cover rounded-md"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 rounded-md">
-                        <span className="text-[8px] font-bold text-white">
-                          {(shortcut.title?.[0] || 'A').toUpperCase()}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                  <ShortcutIcon key={shortcut.id} shortcut={shortcut} className="aspect-square h-full w-full !rounded-md" />
                 );
               })}
             </div>
@@ -61,7 +43,7 @@ export function DragOverlayItem({ item, shortcuts = [] }: DragOverlayItemProps) 
             </div>
           )}
         </div>
-        <span className="text-sm font-medium text-white/90 drop-shadow-md truncate text-center w-full">
+        <span className="line-clamp-3 min-h-[60px] w-full break-words text-center text-sm font-medium leading-5 text-white/90 drop-shadow-md [overflow-wrap:anywhere]">
           {folder.name}
         </span>
       </div>
@@ -70,28 +52,14 @@ export function DragOverlayItem({ item, shortcuts = [] }: DragOverlayItemProps) 
 
   // 快捷方式
   const shortcut = item as Shortcut;
-  const faviconUrl = getFaviconUrl(shortcut);
 
   return (
-    <div className="flex flex-col items-center gap-2 w-16 opacity-90 cursor-grabbing">
-      <div className="relative w-14 h-14 rounded-[18px] liquid-glass-icon flex items-center justify-center overflow-hidden shadow-2xl scale-110">
+    <div className="flex min-h-[156px] flex-col items-center gap-3 px-2 py-3 opacity-90 cursor-grabbing">
+      <div className="relative w-16 h-16 shrink-0 rounded-[20px] liquid-glass-icon flex items-center justify-center overflow-hidden shadow-2xl scale-110">
         <div className="glass-refraction" />
-        {faviconUrl ? (
-          <img
-            src={faviconUrl}
-            alt={shortcut.title}
-            className="w-[85%] h-[85%] object-contain rounded-xl relative z-10"
-            draggable={false}
-          />
-        ) : (
-          <div className="w-[80%] h-[80%] flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl relative z-10">
-            <span className="text-2xl font-bold text-white">
-              {shortcut.title.charAt(0).toUpperCase()}
-            </span>
-          </div>
-        )}
+        <ShortcutIcon shortcut={shortcut} className="relative z-10 h-[82%] w-[82%]" />
       </div>
-      <span className="text-sm font-medium text-white/90 drop-shadow-md truncate text-center w-full">
+      <span className="line-clamp-3 min-h-[60px] w-full break-words text-center text-sm font-medium leading-5 text-white/90 drop-shadow-md [overflow-wrap:anywhere]">
         {shortcut.title}
       </span>
     </div>

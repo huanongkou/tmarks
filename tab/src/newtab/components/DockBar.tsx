@@ -203,9 +203,10 @@ export function DockBar() {
 
   return (
     <div 
-      className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-40 transition-opacity duration-300 ${
+      className={`fixed bottom-4 -translate-x-1/2 z-40 transition-opacity duration-300 ${
         isVisible ? 'opacity-100' : 'opacity-0'
       }`}
+      style={{ left: 'calc(50% + var(--newtab-sidebar-offset) / 2)', maxWidth: 'calc(100vw - var(--newtab-sidebar-offset) - 2rem)' }}
     >
       <DndContext
         sensors={sensors}
@@ -217,7 +218,7 @@ export function DockBar() {
           strategy={horizontalListSortingStrategy}
         >
           <div 
-            className={`flex items-center gap-2 px-4 py-3 rounded-2xl glass-dark ${isRefreshing ? 'animate-pulse' : ''}`}
+            className={`flex items-center gap-2 overflow-x-auto px-4 py-3 rounded-2xl glass-dark ${isRefreshing ? 'animate-pulse' : ''}`}
             onDoubleClick={handleDoubleClick}
             title="拖拽排序 | 双击同步最新"
           >

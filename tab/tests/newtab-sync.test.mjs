@@ -1,3 +1,4 @@
+import './web-locks.mjs';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -114,7 +115,7 @@ test('validates the entire upload before writing any row', async () => {
 test('recovery detaches missing folders, keeps local-only URLs and is idempotent', () => {
   const local = { shortcuts: [
     { id: 'local', title: 'Local', url: 'https://local.test', groupId: 'work', position: 0 },
-    { id: 'old', title: 'Existing', url: 'https://first.test', groupId: 'deleted', folderId: 'lost', position: 1 },
+    { id: 'old', title: 'Existing', note: 'Local note', url: 'https://first.test', groupId: 'deleted', folderId: 'lost', position: 1 },
   ], shortcutGroups: [{ id: 'work', name: 'Work', icon: 'Folder', position: 0 }] };
   const details = [
     { id: 's1', title: 'First', url: 'https://first.test' },
@@ -128,6 +129,7 @@ test('recovery detaches missing folders, keeps local-only URLs and is idempotent
   assert.equal(first.shortcuts[0].groupId, 'work');
   assert.ok(first.shortcuts.slice(1).every(s => s.groupId === 'home' && !s.folderId));
   assert.equal(first.activeGroupId, 'home');
+  assert.equal(first.shortcuts.find(s => s.id === 'old').note, 'Local note');
   assert.ok(first.shortcutGroups.some(g => g.id === 'home'));
 });
 
@@ -140,13 +142,12 @@ test('GET recovery persists merged data; stale server or invalid key never chang
   const requests = [];
   globalThis.fetch = async (url, options) => {
     requests.push({ url, options });
-    return Response.json({ data: { recovery_version: 1,
-      shortcuts: [{ id: 'cloud', title: 'Cloud', url: 'https://cloud.test' }] } });
+    return Response.json({ data: { protocol: 2, revision: 1, entities: { groups: { home: { version: 1, value: { id: 'home', name: '首页', icon: 'Home', position: 0 } } }, folders: {}, shortcuts: { cloud: { version: 1, value: { id: 'cloud', title: 'Cloud', url: 'https://cloud.test', note: '', groupId: 'home', position: 0, createdAt: 1 } } } } } });
   };
   assert.equal(await recovery.restoreNewtabFromCloud(), 1);
-  assert.equal(requests[0].url, 'https://my.test/api/tab/newtab/sync');
+  assert.equal(requests[0].url, 'https://my.test/api/tab/newtab/sync-v2');
   assert.equal(requests[0].options.headers['X-API-Key'], 'test-key');
-  assert.equal(requests[0].options.method, undefined);
+  assert.equal(requests[0].options.method, 'GET');
   assert.equal(stored.newtab.shortcuts[0].groupId, 'home');
   const before = stored.newtab;
   globalThis.fetch = async () => Response.json({ data: { shortcuts: [] } });

@@ -1,3 +1,5 @@
+import { initializeNewtabSync } from './newtab-sync';
+initializeNewtabSync();
 import { cacheManager } from '@/lib/services/cache-manager';
 import { tagRecommender } from '@/lib/services/tag-recommender';
 import { bookmarkService } from '@/lib/services/bookmark-service';
@@ -165,6 +167,7 @@ chrome.runtime.onMessage.addListener(
     sender: chrome.runtime.MessageSender,
     sendResponse: (response: MessageResponse) => void
   ) => {
+    if ((message as { type: string }).type === 'NEWTAB_SYNC_NOW') return;
     // Handle async operations
     handleMessage(message, sender)
       .then(response => sendResponse(response))

@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS: NewTabSettings = {
   showSeconds: false,
   showSearch: true,
   searchEngine: 'google',
+  sidebarPinned: false,
   showShortcuts: true,
   shortcutColumns: 8, // 支持 6 | 8 | 10
   shortcutStyle: 'icon',

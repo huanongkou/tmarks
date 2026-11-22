@@ -85,6 +85,9 @@ export interface Shortcut {
   id: string;
   url: string;
   title: string;
+  note?: string;
+  fallbackIcon?: string;
+  fallbackColor?: string;
   favicon?: string;
   faviconBase64?: string; // 离线缓存的 base64 图标
   position: number;
@@ -131,6 +134,9 @@ export interface NewTabSettings {
   showSearch: boolean;
   searchEngine: SearchEngine;
   
+  // 侧栏
+  sidebarPinned: boolean;
+
   // 快捷方式
   showShortcuts: boolean;
   shortcutColumns: 6 | 8 | 10;

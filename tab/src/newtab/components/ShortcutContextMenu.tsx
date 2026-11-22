@@ -63,6 +63,7 @@ export function ShortcutContextMenu({ x, y, items, onClose }: ShortcutContextMen
   return createPortal(
     <div
       ref={menuRef}
+      onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
       className="fixed z-[9999] min-w-[180px] rounded-lg glass-dark border border-white/10 shadow-xl py-1 animate-fadeIn"
       style={{ left: x, top: y }}
     >

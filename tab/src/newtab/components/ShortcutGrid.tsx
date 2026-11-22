@@ -5,24 +5,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Link, FolderPlus } from 'lucide-react';
+import { Plus, Link, FolderPlus, Trash2, Edit, RefreshCw } from 'lucide-react';
 import {
-  DndContext,
-  closestCenter,
-  pointerWithin,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragOverlay,
-  type DragStartEvent,
+  useDndMonitor,
   type DragEndEvent,
   type DragOverEvent,
-  type CollisionDetection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useNewtabStore } from '../hooks/useNewtabStore';
@@ -32,9 +22,11 @@ import { FolderModal } from './FolderModal';
 import { AddFolderModal } from './AddFolderModal';
 import { Z_INDEX } from '../constants/z-index';
 import { AddShortcutModal } from './AddShortcutModal';
-import { DragOverlayItem } from './DragOverlayItem';
+import { ShortcutContextMenu } from './ShortcutContextMenu';
+import { refreshShortcutIcon, saveShortcutEdits } from '../services/shortcut-actions';
 import { FAVICON_API } from '../constants';
 import type { Shortcut, ShortcutFolder } from '../types';
+import { getGroupItems } from '../utils/shortcut-layout';
 
 interface ShortcutGridProps {
   columns: 6 | 8 | 10;
@@ -49,8 +41,7 @@ type GridItemType = (Shortcut | ShortcutFolder) & { itemType: 'shortcut' | 'fold
 export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: ShortcutGridProps) {
   const { 
     shortcuts, 
-    reorderShortcuts, 
-    getFilteredShortcuts,
+    reorderGroupItems,
     shortcutFolders,
     activeGroupId,
     getFolderShortcuts,
@@ -59,6 +50,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     removeFolder,
     addShortcut,
     moveShortcutToFolder,
+    removeShortcut,
   } = useNewtabStore();
   
   // 状态
@@ -67,8 +59,33 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
   const [editingFolder, setEditingFolder] = useState<ShortcutFolder | null>(null);
   const [showAddToFolderModal, setShowAddToFolderModal] = useState(false);
   
+  const [shortcutMenu, setShortcutMenu] = useState<{ x: number; y: number; shortcut: Shortcut } | null>(null);
+
+  const [editingShortcut, setEditingShortcut] = useState<Shortcut | null>(null);
+  const [iconMessage, setIconMessage] = useState('');
+  const refreshingIcons = useRef(new Set<string>());
+  const iconRequest = useRef(0);
+  const handleRefreshIcon = async (shortcut: Shortcut) => {
+    if (refreshingIcons.current.has(shortcut.id)) return;
+    refreshingIcons.current.add(shortcut.id);
+    const request = ++iconRequest.current;
+    setIconMessage(`正在刷新「${shortcut.title}」的图标…`);
+    try {
+      const refreshed = await refreshShortcutIcon(shortcut.id);
+      if (request === iconRequest.current) setIconMessage(refreshed ? '图标已刷新' : '网站图标获取失败，已随机分配内置图标');
+    } catch {
+      if (request === iconRequest.current) setIconMessage('刷新失败，请稍后重试');
+    } finally {
+      refreshingIcons.current.delete(shortcut.id);
+    }
+  };
+  useEffect(() => {
+    if (!iconMessage || iconMessage.startsWith('正在')) return;
+    const timer = setTimeout(() => setIconMessage(''), 4000);
+    return () => clearTimeout(timer);
+  }, [iconMessage]);
+
   // 拖拽状态
-  const [activeId, setActiveId] = useState<string | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
   const mergeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastOverIdRef = useRef<string | null>(null);
@@ -80,14 +97,6 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
   const lastTimeRef = useRef(0);
   const isChangingRef = useRef(false);
 
-  // 获取当前分组的快捷方式（不在文件夹内的）
-  const filteredShortcuts = getFilteredShortcuts();
-  
-  // 获取当前分组的文件夹
-  const filteredFolders = shortcutFolders.filter(
-    (f) => f.groupId === (activeGroupId ?? 'home')
-  );
-  
   // 当前打开的文件夹
   const openFolder = openFolderId 
     ? shortcutFolders.find(f => f.id === openFolderId) 
@@ -97,14 +106,22 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     : [];
 
   // 合并所有项目用于排序
-  const allItems: GridItemType[] = [
-    ...filteredFolders.map(f => ({ ...f, itemType: 'folder' as const })),
-    ...filteredShortcuts.map(s => ({ ...s, itemType: 'shortcut' as const })),
-  ];
+  const allItems: GridItemType[] = getGroupItems(shortcuts, shortcutFolders, activeGroupId || 'home');
 
   // 分页计算
+  const [visibleColumns, setVisibleColumns] = useState<number>(columns);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const updateColumns = () => setVisibleColumns(Math.max(1, Math.min(columns, Math.floor((container.clientWidth - 32 + 24) / 136))));
+    updateColumns();
+    const observer = new ResizeObserver(updateColumns);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [columns]);
+
   const rows = 3;
-  const itemsPerPage = columns * rows;
+  const itemsPerPage = visibleColumns * rows;
   const totalPages = Math.ceil(allItems.length / itemsPerPage);
 
   // 获取所有页面
@@ -114,48 +131,12 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     pages.push(allItems.slice(start, start + itemsPerPage));
   }
 
-  // 传感器配置
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 10 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  // 自定义碰撞检测 - 参考 iTabs 实现
-  const collisionDetection: CollisionDetection = useCallback(
-    (args) => {
-      // 1. 优先使用指针位置检测（最精确）
-      const pointerCollisions = pointerWithin(args);
-      if (pointerCollisions && pointerCollisions.length > 0) {
-        return pointerCollisions;
-      }
-      
-      // 2. 使用最近中心点检测（作为后备）
-      return closestCenter(args);
-    }, 
-    []
-  );
-
-  // 响应式网格列数
-  const gridCols = {
-    6: 'grid-cols-4 sm:grid-cols-6',
-    8: 'grid-cols-4 sm:grid-cols-6 md:grid-cols-8',
-    10: 'grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10',
-  };
-
-  // 拖拽开始
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string);
-  };
-
   // 拖拽悬停
   const handleDragOver = (event: DragOverEvent) => {
     const { active, over } = event;
+    if (active.data.current?.folderId || active.data.current?.type === 'group') return;
     
-    if (!over || active.id === over.id) {
+    if (!over || active.id === over.id || over.data.current?.type === 'folder') {
       if (mergeTimerRef.current) {
         clearTimeout(mergeTimerRef.current);
         mergeTimerRef.current = null;
@@ -180,8 +161,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
       if (!activeItem || !overItem) return;
 
       if (activeItem.itemType === 'shortcut') {
-        const canMerge = overItem.itemType === 'folder' || 
-                         overItem.itemType === 'shortcut';
+        const canMerge = overItem.itemType === 'shortcut';
         
         if (canMerge) {
           mergeTimerRef.current = setTimeout(() => {
@@ -195,6 +175,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
   // 拖拽结束
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
+    if (active.data.current?.folderId || active.data.current?.type === 'group') return;
     
     if (mergeTimerRef.current) {
       clearTimeout(mergeTimerRef.current);
@@ -203,22 +184,16 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
 
     const isMergeAction = mergeTargetId && over && mergeTargetId === over.id;
     
-    setActiveId(null);
     setMergeTargetId(null);
     lastOverIdRef.current = null;
 
-    if (!over) return;
+    if (!over || over.data.current?.type === 'group' || (active.data.current?.type === 'shortcut' && over.data.current?.type === 'folder')) return;
 
     if (isMergeAction) {
       const activeItem = allItems.find(item => item.id === active.id);
       const overItem = allItems.find(item => item.id === over.id);
 
       if (!activeItem || !overItem) return;
-
-      if (activeItem.itemType === 'shortcut' && overItem.itemType === 'folder') {
-        moveShortcutToFolder(active.id as string, over.id as string);
-        return;
-      }
 
       if (activeItem.itemType === 'shortcut' && overItem.itemType === 'shortcut') {
         const newFolderId = addFolder('新文件夹', activeGroupId ?? undefined);
@@ -229,14 +204,22 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     }
 
     if (active.id !== over.id) {
-      const oldIndex = shortcuts.findIndex((s) => s.id === active.id);
-      const newIndex = shortcuts.findIndex((s) => s.id === over.id);
-
-      if (oldIndex !== -1 && newIndex !== -1) {
-        reorderShortcuts(oldIndex, newIndex);
-      }
+      reorderGroupItems(String(active.id), String(over.id));
     }
   };
+
+  useDndMonitor({
+    onDragOver: handleDragOver,
+    onDragEnd: handleDragEnd,
+    onDragCancel: () => {
+      if (mergeTimerRef.current) clearTimeout(mergeTimerRef.current);
+      mergeTimerRef.current = null;
+      setMergeTargetId(null);
+      lastOverIdRef.current = null;
+    },
+  });
+
+  useEffect(() => () => { if (mergeTimerRef.current) clearTimeout(mergeTimerRef.current); }, []);
 
   // 分页切换
   const goToPage = useCallback((targetPage: number) => {
@@ -313,11 +296,6 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     }
   }, [allItems.length, totalPages, currentPage]);
 
-  // 获取拖拽中的项目
-  const activeItem = activeId 
-    ? allItems.find(item => item.id === activeId) 
-    : null;
-
   // 文件夹操作
   const handleSaveFolder = (name: string) => {
     if (editingFolder) {
@@ -335,12 +313,13 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
     }
   };
 
-  const handleAddShortcutToFolder = (url: string, title: string) => {
+  const handleAddShortcutToFolder = (url: string, title: string, note: string) => {
     if (openFolderId) {
       const domain = new URL(url).hostname;
       addShortcut({
         url,
         title,
+        note,
         favicon: `${FAVICON_API}${domain}&sz=64`,
         groupId: activeGroupId ?? undefined,
         folderId: openFolderId,
@@ -360,19 +339,19 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
   // 统一添加按钮（点击显示菜单，右键批量编辑）
   const AddButton = () => (
     <>
-      <div className="relative flex flex-col items-center gap-2 w-16">
+      <div className="relative flex min-h-[156px] w-full min-w-0 flex-col items-center gap-3 px-2 py-3">
         <button
           onClick={handleToggleAddMenu}
           onContextMenu={(e) => {
             e.preventDefault();
             if (onBatchEditClick) onBatchEditClick();
           }}
-          className="w-14 h-14 rounded-[18px] bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all border border-white/10 cursor-pointer group"
+          className="w-16 h-16 shrink-0 rounded-[20px] bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all border border-white/10 cursor-pointer group"
           title="添加 | 右键批量编辑"
         >
           <Plus className={`w-6 h-6 text-white/60 transition-transform ${showAddMenu ? 'rotate-45' : ''}`} />
         </button>
-        <span className="text-sm text-white/60">添加</span>
+        <span className="min-h-[60px] text-sm leading-5 text-white/60">添加</span>
       </div>
       
       {/* 添加选项弹窗 - 居中显示 */}
@@ -427,13 +406,6 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
 
   return (
     <>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={collisionDetection}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDragEnd={handleDragEnd}
-      >
         <div ref={containerRef} className="w-full overflow-hidden">
           <div
             className="flex transition-transform duration-300 ease-out"
@@ -445,7 +417,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
                   items={pageItems.map(item => item.id)}
                   strategy={rectSortingStrategy}
                 >
-                  <div className={`grid ${gridCols[columns]} gap-x-6 gap-y-4 justify-items-center py-4`}>
+                  <div className="grid w-full gap-x-6 gap-y-7 px-4 py-4 justify-items-center" style={{ gridTemplateColumns: `repeat(${visibleColumns}, minmax(0, 1fr))`, maxWidth: `${visibleColumns * 144 + (visibleColumns - 1) * 24 + 32}px` }}>
                     {pageItems.map((item) => (
                       item.itemType === 'folder' ? (
                         <ShortcutFolderItem
@@ -461,7 +433,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
                           shortcut={item as Shortcut}
                           style={style}
                           isMergeTarget={mergeTargetId === item.id}
-                          onContextMenu={onBatchEditClick ? () => onBatchEditClick() : undefined}
+                          onContextMenu={(event, shortcut) => setShortcutMenu({ x: event.clientX, y: event.clientY, shortcut })}
                         />
                       )
                     ))}
@@ -487,15 +459,33 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
           </div>
         )}
 
-        <DragOverlay>
-          {activeItem && (
-            <DragOverlayItem 
-              item={activeItem} 
-              shortcuts={activeItem.itemType === 'folder' ? getFolderShortcuts(activeItem.id) : []}
-            />
-          )}
-        </DragOverlay>
-      </DndContext>
+
+      {shortcutMenu && (
+        <ShortcutContextMenu
+          x={shortcutMenu.x}
+          y={shortcutMenu.y}
+          onClose={() => setShortcutMenu(null)}
+          items={[
+            { label: '打开网页', icon: <Link className="h-4 w-4" />, onClick: () => { window.location.href = shortcutMenu.shortcut.url; } },
+            { label: '编辑', icon: <Edit className="h-4 w-4" />, onClick: () => setEditingShortcut(shortcutMenu.shortcut) },
+            { label: '刷新图标', icon: <RefreshCw className="h-4 w-4" />, onClick: () => { void handleRefreshIcon(shortcutMenu.shortcut); } },
+            ...(onBatchEditClick ? [{ label: '批量管理', icon: <Edit className="h-4 w-4" />, onClick: onBatchEditClick, divider: true }] : []),
+            { label: '删除快捷方式', icon: <Trash2 className="h-4 w-4" />, danger: true, onClick: () => {
+              if (confirm(`删除快捷方式「${shortcutMenu.shortcut.title}」？`)) removeShortcut(shortcutMenu.shortcut.id);
+            } },
+          ]}
+        />
+      )}
+
+      {editingShortcut && (
+        <AddShortcutModal
+          isOpen
+          shortcut={editingShortcut}
+          onClose={() => setEditingShortcut(null)}
+          onAdd={(url, title, note) => saveShortcutEdits(editingShortcut.id, url, title, note)}
+        />
+      )}
+      {iconMessage && <div role="status" className="pointer-events-none fixed bottom-6 left-1/2 z-[150] -translate-x-1/2 rounded-xl border border-white/15 bg-slate-900/95 px-4 py-3 text-sm text-white shadow-xl">{iconMessage}</div>}
 
       {openFolder && (
         <FolderModal
@@ -503,6 +493,7 @@ export function ShortcutGrid({ columns, style, onAddClick, onBatchEditClick }: S
           shortcuts={openFolderShortcuts}
           onClose={() => setOpenFolderId(null)}
           onDeleteFolder={handleDeleteFolder}
+          onShortcutContextMenu={(event, shortcut) => setShortcutMenu({ x: event.clientX, y: event.clientY, shortcut })}
         />
       )}
 

@@ -84,16 +84,31 @@ async function compressImage(blob: Blob, maxSizeKB: number = 10): Promise<string
  * @param maxSizeKB 最大大小（KB），默认 10KB
  * @returns base64 格式的图标，失败返回 null
  */
-export async function downloadFavicon(url: string, maxSizeKB: number = 10): Promise<string | null> {
+export async function downloadFavicon(url: string, maxSizeKB: number = 10, forceRefresh: boolean = false): Promise<string | null> {
   try {
     const domain = new URL(url).hostname;
     // 使用较小的尺寸以减少存储空间
-    const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+    const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64${forceRefresh ? `&_refresh=${Date.now()}` : ""}`;
     
-    const response = await fetch(faviconUrl);
+    const response = await fetch(faviconUrl, { cache: forceRefresh ? "reload" : "default", signal: AbortSignal.timeout(15000) });
     if (!response.ok) return null;
     
     const blob = await response.blob();
+    if (!blob.type.toLowerCase().startsWith('image/')) return null;
+    // HTTP 成功也可能返回损坏或透明空图，先解码验证后再缓存。
+    if (typeof createImageBitmap === 'function') {
+      const bitmap = await createImageBitmap(blob);
+      try {
+        if (bitmap.width <= 1 || bitmap.height <= 1) return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 16;
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.drawImage(bitmap, 0, 0, 16, 16);
+          if (!context.getImageData(0, 0, 16, 16).data.some((value, index) => index % 4 === 3 && value > 16)) return null;
+        }
+      } finally { bitmap.close(); }
+    }
     
     // 检查是否是有效的图片（大于 100 字节）
     if (blob.size < 100) return null;

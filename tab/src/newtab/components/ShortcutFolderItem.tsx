@@ -5,10 +5,11 @@
 
 import { useEffect, useRef } from 'react';
 import { Folder } from 'lucide-react';
+import { useDndContext } from '@dnd-kit/core';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { ShortcutFolder, Shortcut } from '../types';
-import { getFaviconUrl } from '../utils/favicon';
+import { ShortcutIcon } from './ShortcutIcon';
 
 interface ShortcutFolderItemProps {
   folder: ShortcutFolder;
@@ -19,31 +20,9 @@ interface ShortcutFolderItemProps {
 
 // 迷你图标组件
 function MiniIcon({ shortcut }: { shortcut: Shortcut }) {
-  const faviconUrl = getFaviconUrl(shortcut);
-  
   return (
     <div className="aspect-square rounded-md overflow-hidden liquid-glass-mini flex items-center justify-center">
-      {faviconUrl ? (
-        <img
-          src={faviconUrl}
-          alt=""
-          className="w-full h-full object-cover rounded-md"
-          onError={(e) => {
-            const target = e.target as HTMLImageElement;
-            target.style.display = 'none';
-            if (target.parentElement) {
-              target.parentElement.classList.add('bg-gradient-to-br', 'from-blue-500', 'to-purple-600');
-              target.parentElement.innerHTML = `<span class="text-[8px] font-bold text-white">${(shortcut.title?.[0] || 'A').toUpperCase()}</span>`;
-            }
-          }}
-        />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500 to-purple-600 rounded-md">
-          <span className="text-[8px] font-bold text-white">
-            {(shortcut.title?.[0] || 'A').toUpperCase()}
-          </span>
-        </div>
-      )}
+      <ShortcutIcon shortcut={shortcut} className="h-full w-full !rounded-md" />
     </div>
   );
 }
@@ -55,6 +34,8 @@ export function ShortcutFolderItem({
   isMergeTarget = false,
 }: ShortcutFolderItemProps) {
   const folderRef = useRef<HTMLDivElement>(null);
+  const { active } = useDndContext();
+  const isShortcutDrag = active?.data.current?.type === 'shortcut';
   
   const {
     attributes,
@@ -63,10 +44,13 @@ export function ShortcutFolderItem({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: folder.id });
+    isOver,
+  } = useSortable({ id: folder.id, data: { type: 'folder', groupId: folder.groupId || 'home' },
+    disabled: { draggable: isShortcutDrag, droppable: false } });
+  const isDropTarget = isShortcutDrag && isOver;
 
   const sortableStyle = {
-    transform: CSS.Transform.toString(transform),
+    transform: isShortcutDrag ? undefined : CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
     zIndex: isDragging ? 10 : 1,
@@ -91,7 +75,7 @@ export function ShortcutFolderItem({
 
   // 获取前9个快捷方式用于预览
   const previewShortcuts = shortcuts.slice(0, 9);
-  const iconSize = 56; // 图标大小
+  const iconSize = 64; // 图标大小
   const padding = iconSize * 0.12;
 
   return (
@@ -101,7 +85,8 @@ export function ShortcutFolderItem({
       {...attributes}
       {...listeners}
       data-shortcut-id={folder.id}
-      className="relative flex flex-col items-center gap-2 cursor-grab active:cursor-grabbing w-16 min-w-[64px]"
+      className={`relative flex min-h-[156px] w-full min-w-0 flex-col items-center gap-3 rounded-2xl px-2 py-3 cursor-grab active:cursor-grabbing transition-colors ${isDropTarget ? 'bg-blue-500/20 ring-2 ring-inset ring-blue-300' : 'hover:bg-white/10'}`}
+      title={folder.name}
       onClick={() => !isDragging && onOpen(folder.id)}
     >
       {/* 液态玻璃文件夹图标 */}
@@ -142,11 +127,12 @@ export function ShortcutFolderItem({
         )}
 
         {/* 合并目标高亮 */}
-        {isMergeTarget && <div className="merge-target-highlight" />}
+        {(isMergeTarget || isDropTarget) && <div className="merge-target-highlight" />}
       </div>
 
+      {isDropTarget && <span className="pointer-events-none absolute bottom-1 rounded-lg bg-blue-500 px-2 py-1 text-xs text-white">松开移入文件夹</span>}
       {/* 文件夹名称 */}
-      <span className="text-xs text-white truncate w-full text-center px-1 text-shadow-sm">
+      <span className="line-clamp-3 min-h-[60px] w-full break-words text-center text-sm font-medium leading-5 text-white/90 text-shadow-sm [overflow-wrap:anywhere]">
         {folder.name}
       </span>
     </div>
